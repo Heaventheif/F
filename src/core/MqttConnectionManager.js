@@ -304,7 +304,7 @@ export class MqttConnectionManager extends EventEmitter {
         // CRITICAL-03 FIX: لا تُطلق الـ watchdog أثناء CONNECTING / AUTH_FAILED / STOPPED.
         // المشكلة السابقة: إذا استغرق handshake MQTT أكثر من initialGraceMs (دقيقتان)،
         // كان الـ watchdog يقتل الجلسة الصحيحة لأن _socketAlive() يعيد false ريثما
-        // يُكمل fca-nx إعداد مُوكّل الأحداث الداخلي.
+        // يُكمل fcanew-r3nz75 إعداد مُوكّل الأحداث الداخلي.
         if (this.state === "CONNECTING" || this.state === "AUTH_FAILED" || this.state === "STOPPED") {
           return; // انتظر الدورة القادمة — المعالجات الداخلية ستُبلِّغ عن أي خطأ حقيقي
         }

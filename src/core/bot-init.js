@@ -2,17 +2,17 @@
 /**
  * src/core/bot-init.js
  * ────────────────────
- * تهيئة البوت بعد تسجيل الدخول عبر fca-nx.
- * مستقل تماماً — يستخدم fca-nx فقط.
+ * تهيئة البوت بعد تسجيل الدخول عبر fcanew-r3nz75.
+ * مستقل تماماً — يستخدم fcanew-r3nz75 فقط.
  */
 
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
-// fca-nx exports
+// fcanew-r3nz75 exports
 let _attachThreadInfoRealtimeSync = null;
 try {
-  const fcaNx = require("fca");
+  const fcaNx = require("fcanew-r3nz75");
   _attachThreadInfoRealtimeSync = fcaNx.attachThreadInfoRealtimeSync ?? null;
 } catch (_) {}
 

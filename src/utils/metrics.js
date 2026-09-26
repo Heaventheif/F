@@ -2,7 +2,7 @@
 /**
  * metrics.js — Lightweight observability bus
  * ───────────────────────────────────────────
- * Drop-in for fca-nx/src/utils/metrics.js
+ * Drop-in for fcanew-r3nz75/src/utils/metrics.js
  *
  * WHAT IT DOES:
  *   - Maintains in-process counters for every meaningful bot event

@@ -1,7 +1,7 @@
 "use strict";
 process.env.TZ = 'Europe/Berlin';
 
-// ── BUG-01 FIX: علَم يمنع fca-nx من تسجيل معالجات أخطاء مكررة ──────────────
+// ── BUG-01 FIX: علَم يمنع fcanew-r3nz75 من تسجيل معالجات أخطاء مكررة ──────────────
 global.__mainErrorHandlersInstalled = true;
 
 import path from "path";

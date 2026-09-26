@@ -2,7 +2,7 @@
 /**
  * rateLimiter.js — URL-classified token-bucket rate limiter
  * ───────────────────────────────────────────────────────────
- * Drop-in for fca-nx/src/utils/rateLimiter.js
+ * Drop-in for fcanew-r3nz75/src/utils/rateLimiter.js
  *
  * PROBLEM:
  *   Every command module in src/cmds/ can fire GraphQL calls unbounded.

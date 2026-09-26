@@ -7,7 +7,7 @@
  *
  * Must be run INSIDE a running bot process that exposes:
  *   global._mqttHealthByBot  — Map<botIndex, MqttConnectionManager.health()>
- *   global.botApi            — fca-nx API object
+ *   global.botApi            — fcanew-r3nz75 API object
  *   global.botApi._sessionExtender.getStats()
  *
  * What it checks every 60 seconds:

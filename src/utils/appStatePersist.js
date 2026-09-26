@@ -172,7 +172,7 @@ export function persistAppState(state, source = "auto") {
 
   console.log(`[APPSTATE] 💾 حُفظ (${normalized.length} cookie | ${source}${saved ? " | 🔒disk" : ""})`);
 
-  // Metrics are maintained by the bot process; persistence must not depend on fca-nx internals.
+  // Metrics are maintained by the bot process; persistence must not depend on fcanew-r3nz75 internals.
   return true;
 }
 

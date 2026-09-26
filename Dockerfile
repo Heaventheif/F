@@ -6,7 +6,6 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ gcc git
 
 COPY package.json bun.lock* ./
-COPY fca-nx ./fca-nx
 
 RUN bun install --production
 
@@ -25,7 +24,6 @@ RUN addgroup -S botgroup && adduser -S botuser -G botgroup
 
 # Copy only what is needed from the deps stage
 COPY --chown=botuser:botgroup --from=deps /app/node_modules ./node_modules
-COPY --chown=botuser:botgroup --from=deps /app/fca-nx       ./fca-nx
 
 # Copy application source
 COPY --chown=botuser:botgroup . .

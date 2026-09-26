@@ -14,7 +14,7 @@ import { createRequire }  from "node:module";
 import { fileURLToPath }  from "node:url";
 
 const require = createRequire(import.meta.url);
-const fcaNx   = require("fca");
+const fcaNx   = require("fcanew-r3nz75");
 const login   = fcaNx.login ?? fcaNx.default ?? fcaNx;
 
 import { readAppStateFromEnv, updateAppStateInMemory } from "../utils/runtimeEnv.js";
@@ -97,7 +97,7 @@ export function saveAppStateForBot(state, botIndex = 1, source = "runtime") {
   }
 }
 
-// ── خيارات fca-nx ─────────────────────────────────────────────────────────────
+// ── خيارات fcanew-r3nz75 ─────────────────────────────────────────────────────────────
 const GLOBAL_OPTIONS = {
   selfListen:     false,
   listenEvents:   true,
