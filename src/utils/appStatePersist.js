@@ -38,6 +38,10 @@ let _lastSaveTimestamp = 0;
 export async function saveAppStateToMongo() { return false; }
 export async function loadAppStateFromMongo() { return null; }
 
+export function readPersistedAppState() {
+  return _atomicRead(STATE_FILE);
+}
+
 // ── تشفير AES-256-GCM ──────────────────────────────────────────────────────
 function _getKey() {
   const k = process.env.FCA_STATE_KEY || process.env.STATE_ENCRYPT_KEY || "";
@@ -168,7 +172,7 @@ export function persistAppState(state, source = "auto") {
 
   console.log(`[APPSTATE] 💾 حُفظ (${normalized.length} cookie | ${source}${saved ? " | 🔒disk" : ""})`);
 
-  try { require("./fca-nx/src/utils/metrics").bump("appStateSaves"); } catch (_) {}
+  // Metrics are maintained by the bot process; persistence must not depend on fca-nx internals.
   return true;
 }
 

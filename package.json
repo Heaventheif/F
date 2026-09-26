@@ -19,16 +19,13 @@
     "cheerio": "^1.2.0"
   },
   "dependencies": {
-    "@vreden/youtube_scraper": "^1.2.9",
-    "@tobyg74/tiktok-api-dl": "1.2.3",
     "bing-translate-api": "^4.2.0",
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
-    "fca-nx": "file:./fca-nx",
     "fs-extra": "^11.3.6",
     "google-translate-api-x": "^10.7.3",
     "mongoose": "^9.7.4",
-    "youtube-sr": "^4.3.12"
+    "fca": "npm:fca-nx@6.7.3"
   },
   "_hardened": "fca-nx merged v4.0 — secureStore+mergeOnSave+rateLimiter+watchdog+stealthMode+deviceManager+monitor"
 }

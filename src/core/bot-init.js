@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 // fca-nx exports
 let _attachThreadInfoRealtimeSync = null;
 try {
-  const fcaNx = require("fca-nx");
+  const fcaNx = require("fca");
   _attachThreadInfoRealtimeSync = fcaNx.attachThreadInfoRealtimeSync ?? null;
 } catch (_) {}
 

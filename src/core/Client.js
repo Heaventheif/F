@@ -14,7 +14,7 @@ import { createRequire }  from "node:module";
 import { fileURLToPath }  from "node:url";
 
 const require = createRequire(import.meta.url);
-const fcaNx   = require("fca-nx");
+const fcaNx   = require("fca");
 const login   = fcaNx.login ?? fcaNx.default ?? fcaNx;
 
 import { readAppStateFromEnv, updateAppStateInMemory } from "../utils/runtimeEnv.js";
@@ -22,8 +22,8 @@ import { dispatchMqttEvent }    from "../events/onMessage.js";
 import { startCleanupInterval } from "../events/onReady.js";
 import { createMqttConnectionManager } from "./MqttConnectionManager.js";
 import { initBotLifecycle }    from "./bot-init.js";
-import { persistAppState, mergeAppStates } from "../utils/appStatePersist.js";
-import { Watchdog }   from "../../fca-nx/src/safety/watchdog.js";
+import { persistAppState, mergeAppStates, readPersistedAppState } from "../utils/appStatePersist.js";
+import { Watchdog } from "./watchdog.js";
 import { startMonitoring } from "./monitor.js";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -61,8 +61,7 @@ export function loadAppState() {
 
   // 2. من ملف مشفَّر (جديد v4.0 — يبقى بعد تحطُّم العملية)
   try {
-    const { readDecrypted } = require("../fca-nx/src/utils/secureStore.js");
-    const fromFile = readDecrypted?.(STATE_FILE);
+    const fromFile = readPersistedAppState();
     if (Array.isArray(fromFile) && fromFile.length) {
       console.warn("[APPSTATE] ⚠️ استعادة من الملف المشفَّر (البيئة فارغة)");
       return { state: fromFile, index: 1, source: "encrypted-file" };

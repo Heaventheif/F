@@ -1,5 +1,4 @@
 "use strict";
-import Tiktok from "@tobyg74/tiktok-api-dl";
 import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
 import os from "os";
@@ -8,6 +7,7 @@ import { streamAndSend } from "../utils/mediaStream.js";
 import { directSend, directSendParts } from "../utils/directSend.js";
 import { downloadWithFallback, cleanTemp } from "../utils/ytProviders.js";
 import { normalizeMediaUrl } from "../utils/urlNormalizer.js";
+import { getYozoraInfo, getYozoraTitle, buildYozoraDownloadUrl } from "../utils/yozora.js";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
 const PLATFORM_HOSTS = {
   tiktok: [
@@ -141,82 +141,18 @@ async function sendLocalFile(api, threadID, filePath, title, replyToID) {
     return false;
   }
 }
-// TikTok — باستخدام مكتبة @tobyg74/tiktok-api-dl (نفس منطق plugins/tiktok.js)
-const TIKTOK_HOSTS = ["www.tiktok.com", "tiktok.com", "vm.tiktok.com", "vt.tiktok.com"];
-// ترتيب الإصدارات للمحاولة: v1 يُعطي أغنى بيانات، ثم v3، ثم v2
-const TIKTOK_VERSIONS = ["v1", "v3", "v2"];
-function validateTikTokUrl(value) {
-  let u;
-  try { u = new URL(value); } catch {
-    throw new Error("الرابط غير صالح (تأكد من صيغته)");
-  }
-  if (!TIKTOK_HOSTS.includes(u.hostname.toLowerCase())) {
-    throw new Error("الرابط يجب أن يكون من TikTok");
-  }
-}
-/**
- * استخراج رابط الفيديو والعنوان من نتيجة المكتبة حسب الإصدار.
- * @returns {{ url: string, title: string, musicUrl?: string }}
- */
-function extractTikTokMedia(version, result) {
-  if (!result) throw new Error("نتيجة فارغة من المكتبة");
-  switch (version) {
-    case "v1": {
-      const videoUrl =
-        result.video?.playAddr?.[0] ||
-        result.video?.downloadAddr?.[0];
-      if (!videoUrl) throw new Error("لا يوجد رابط فيديو في v1");
-      return {
-        url: videoUrl,
-        title: result.desc || "فيديو تيك توك",
-        musicUrl: result.music?.playUrl?.[0],
-      };
-    }
-    case "v2": {
-      const videoUrl = result.video?.playAddr;
-      if (!videoUrl) throw new Error("لا يوجد رابط فيديو في v2");
-      return {
-        url: videoUrl,
-        title: result.desc || "فيديو تيك توك",
-        musicUrl: result.music?.playUrl,
-      };
-    }
-    case "v3": {
-      const videoUrl = result.videoHD || result.videoWatermark;
-      if (!videoUrl) throw new Error("لا يوجد رابط فيديو في v3");
-      return {
-        url: videoUrl,
-        title: result.desc || "فيديو تيك توك",
-        musicUrl: typeof result.music === "string" ? result.music : undefined,
-      };
-    }
-    default:
-      throw new Error(`إصدار غير معروف: ${version}`);
-  }
-}
-/**
- * محاولة تحميل بيانات الفيديو عبر إصدار واحد من المكتبة.
- */
-async function resolveTikTokWithVersion(tiktokUrl, version) {
-  const response = await Tiktok.Downloader(tiktokUrl, { version });
-  if (!response || response.status !== "success") {
-    throw new Error(response?.message || `فشل الإصدار ${version}`);
-  }
-  const result = response.result;
-  return extractTikTokMedia(version, result);
-}
+// TikTok — عبر Yozora/yt-dlp لتجنب مكتبات TikTok غير المدعومة.
 async function resolveTikTok(url) {
-  validateTikTokUrl(url);
-  const failures = [];
-  for (const version of TIKTOK_VERSIONS) {
-    try {
-      const { url: mediaUrl, title } = await resolveTikTokWithVersion(url, version);
-      return { title: title || "فيديو تيك توك", videoUrl: mediaUrl, platform: "tiktok" };
-    } catch (error) {
-      failures.push(`${version}: ${error.message}`);
-    }
+  try {
+    const info = await getYozoraInfo(url);
+    return {
+      title: getYozoraTitle(info, "فيديو تيك توك"),
+      videoUrl: buildYozoraDownloadUrl(url),
+      platform: "tiktok",
+    };
+  } catch (error) {
+    throw new Error(`فشل تنزيل TikTok عبر Yozora: ${error.message}`);
   }
-  throw new Error(`تعذّر استخراج رابط الفيديو من جميع الإصدارات (${failures.join(" | ")})`);
 }
 // Instagram — باستخدام smfahim.xyz API
 async function resolveInstagram(url) {
