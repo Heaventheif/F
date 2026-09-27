@@ -18,11 +18,10 @@ import { EventEmitter } from "node:events";
 import {
   checkAppStateExpiry,
   persistAppState,
-  extendCookieExpiry,
   getSessionInfo,
   EXPIRY_WARNING_MS,
   EXPIRY_CRITICAL_MS,
-} from "../utils/appStatePersist.js";
+} from "./appStatePersist.js";
 
 // ── ثوابت النظام ──────────────────────────────────────────────────────────────
 
@@ -302,16 +301,10 @@ export class SessionExtender extends EventEmitter {
         _skipSessionInspect: true,
       });
 
-      // مدِّد تواريخ انتهاء الكوكيز بعد كل keep-alive ناجح
+      // Persist only the jar returned by FCA. Local expiry changes cannot
+      // extend a server-side session and would make health checks misleading.
       const freshState = this._api?.getAppState?.();
-      if (freshState?.length) {
-        const extended = extendCookieExpiry(freshState, 60);
-        const changed  = persistAppState(extended, "keep-alive");
-        if (changed) {
-          // أخبر FCA بالحالة الجديدة
-          try { this._api?._ctx?.jar && _rehydrateJar(this._api._ctx.jar, extended); } catch (_) {}
-        }
-      }
+      if (freshState?.length) persistAppState(freshState, "keep-alive");
 
       this._keepAlives++;
       this._lastKeepAlive = new Date().toISOString();
@@ -345,16 +338,14 @@ export class SessionExtender extends EventEmitter {
       await this._internalWarmup(isCritical);
     }
 
-    // مدِّد الكوكيز بعد التجديد
+    // Persist only values FCA actually refreshed; never manufacture expiry.
     const freshState = this._api?.getAppState?.();
-    if (freshState?.length) {
-      const extended = extendCookieExpiry(freshState, 90); // 90 يوم بعد التجديد
-      persistAppState(extended, "post-refresh");
+    if (freshState?.length) persistAppState(freshState, "post-refresh");
+    if (this._cookieRefresher || freshState?.length) {
+      this._extensions++;
+      this._lastExtension  = new Date().toISOString();
+      this._sessionHealthy = true;
     }
-
-    this._extensions++;
-    this._lastExtension  = new Date().toISOString();
-    this._sessionHealthy = true;
 
     console.log(`[EXTENDER:${label}] ✅ تجديد #${this._extensions} — الجلسة مُمدَّدة`);
     this.emit("extended", { count: this._extensions, manual, critical: isCritical });

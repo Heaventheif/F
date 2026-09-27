@@ -70,7 +70,7 @@ import {
   PROJECT_ROOT,
   loadAppState,
   loginBot,
-} from "./src/core/Client.js";
+} from "./src/fca/Client.js";
 import { cleanupOrphanTempFiles } from "./src/utils/tempCleanup.js";
 
 try { await import("dotenv/config"); } catch (_) {}

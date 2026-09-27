@@ -1,7 +1,7 @@
 "use strict";
-// ── Anti-abuse send pacing ─────────────────────────────────────────
-// Meta's automated-behaviour detection flags metronomic send patterns.
-// A 1500ms base with ±200ms jitter looks organic; priority sends use 800ms.
+// ── Conservative send pacing ─────────────────────────────────────
+// Serialize per-thread sends and leave room for transient platform limits.
+// This is a reliability guard, not a mechanism to evade platform enforcement.
 const MIN_SEND_GAP_MS      = 1_500;
 const PRIORITY_SEND_GAP_MS =   800;
 const JITTER_RANGE_MS      =   400; // ±200 ms applied to every outgoing message
@@ -63,15 +63,6 @@ function _gatedSendRaw(api, body, threadID, callback, messageID) {
     const _jitter = Math.floor(Math.random() * JITTER_RANGE_MS) - (JITTER_RANGE_MS >> 1);
     const wait = (MIN_SEND_GAP_MS + _jitter) - (Date.now() - gate.lastSendAt);
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    if (rawApi.__stealth) {
-      try {
-        // timeout 25s لمنع StealthMode من تجميد الإرسال لفترة طويلة جداً
-        await Promise.race([
-          rawApi.__stealth.waitIfNeeded(),
-          new Promise(r => setTimeout(r, 25_000)),
-        ]);
-      } catch (_) {}
-    }
     gate.lastSendAt = Date.now();
     let result;
     try {
@@ -89,7 +80,6 @@ function _gatedSendRaw(api, body, threadID, callback, messageID) {
       }
       throw sendErr;
     }
-    rawApi.__stealth?.recordRequest?.();
     return result;
   });
   gate.promise = resultPromise.catch(e => { console.error("[SEND] خطأ:", e.message); });
@@ -104,19 +94,10 @@ function prioritySend(api, body, threadID, callback, messageID) {
     const _jitter = Math.floor(Math.random() * JITTER_RANGE_MS) - (JITTER_RANGE_MS >> 1);
     const wait = (PRIORITY_SEND_GAP_MS + _jitter) - (Date.now() - gate.lastSendAt);
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    if (rawApi.__stealth) {
-      try {
-        await Promise.race([
-          rawApi.__stealth.waitIfNeeded(),
-          new Promise(r => setTimeout(r, 25_000)),
-        ]);
-      } catch (_) {}
-    }
     gate.lastSendAt = Date.now();
     const result = messageID !== undefined
       ? await rawApi.sendMessage(body, threadID, callback, messageID)
       : await rawApi.sendMessage(body, threadID, callback);
-    rawApi.__stealth?.recordRequest?.();
     return result;
   });
   // الطابور يكمل حتى لو فشلت عملية بالأولوية (لا يُجمّد السلسلة)

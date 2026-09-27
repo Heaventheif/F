@@ -1,6 +1,6 @@
 "use strict";
 /**
- * src/core/bot-init.js
+ * src/fca/bot-init.js
  * ────────────────────
  * تهيئة البوت بعد تسجيل الدخول عبر fcanew-r3nz75.
  * مستقل تماماً — يستخدم fcanew-r3nz75 فقط.
@@ -16,17 +16,10 @@ try {
   _attachThreadInfoRealtimeSync = fcaNx.attachThreadInfoRealtimeSync ?? null;
 } catch (_) {}
 
-// ── botEnhancer (اختياري) ─────────────────────────────────────────────────────
-let _botEnhancerFn = null;
-try {
-  const mod = await import("../utils/bot-enhancer.js").catch(() => null);
-  _botEnhancerFn = mod?.default ?? null;
-} catch (_) {}
-
 // ── SessionExtender (اختياري) ─────────────────────────────────────────────────
 let _createSessionExtender = null;
 try {
-  const mod = await import("../safety/session-extender.js").catch(() => null);
+  const mod = await import("./session-extender.js").catch(() => null);
   _createSessionExtender = mod?.createSessionExtender ?? null;
 } catch (_) {}
 
@@ -105,11 +98,9 @@ export async function initBotLifecycle(api, botIndex, opts = {}) {
   // ── خيارات MQTT ──────────────────────────────────────────────────────────
   try {
     api.setOptions({
-      forceLogin:     true,
       listenEvents:   true,
       updatePresence: false,
-      selfListen:     false,
-      online:         true,
+      autoReconnect:  true,
       autoMarkRead:   false,
       listenTyping:   false,
     });
@@ -152,9 +143,6 @@ export async function initBotLifecycle(api, botIndex, opts = {}) {
       console.warn(`[SYNC:${label}] ⚠️`, e.message);
     }
   }
-
-  // ── botEnhancer ───────────────────────────────────────────────────────────
-  try { _botEnhancerFn?.(); } catch (_) {}
 
   // ── SessionExtender ───────────────────────────────────────────────────────
   if (typeof _createSessionExtender === "function") {

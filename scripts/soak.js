@@ -26,7 +26,7 @@
  */
 
 import fs   from "fs";
-import { STATE_FILE } from "../src/utils/appStatePersist.js";
+import { STATE_FILE } from "../src/fca/appStatePersist.js";
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 

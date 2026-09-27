@@ -1,6 +1,6 @@
 "use strict";
 /**
- * src/core/Client.js — v4.0
+ * src/fca/Client.js — v4.0
  * ───────────────────────────
  * تحسينات v4.0:
  *  - يقرأ AppState من: env → ذاكرة → ملف مشفَّر (بقاء بعد التحطُّم)
@@ -17,14 +17,13 @@ const require = createRequire(import.meta.url);
 const fcaNx   = require("fcanew-r3nz75");
 const login   = fcaNx.login ?? fcaNx.default ?? fcaNx;
 
-import { readAppStateFromEnv, updateAppStateInMemory } from "../utils/runtimeEnv.js";
+import { readAppStateFromEnv, updateAppStateInMemory } from "./runtimeEnv.js";
 import { dispatchMqttEvent }    from "../events/onMessage.js";
 import { startCleanupInterval } from "../events/onReady.js";
 import { createMqttConnectionManager } from "./MqttConnectionManager.js";
 import { initBotLifecycle }    from "./bot-init.js";
-import { persistAppState, mergeAppStates, readPersistedAppState } from "../utils/appStatePersist.js";
-import { Watchdog } from "./watchdog.js";
-import { startMonitoring } from "./monitor.js";
+import { persistAppState, mergeAppStates, readPersistedAppState } from "./appStatePersist.js";
+import { startMonitoring } from "../core/monitor.js";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.join(MODULE_DIR, "..", "..");
@@ -98,14 +97,11 @@ export function saveAppStateForBot(state, botIndex = 1, source = "runtime") {
 const GLOBAL_OPTIONS = {
   selfListen:     false,
   listenEvents:   true,
-  forceLogin:     true,
+  forceLogin:     false,
   autoMarkRead:   false,
   updatePresence: false,
+  autoReconnect:  true,
   online:         true,
-  userAgent:
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-    "AppleWebKit/537.36 (KHTML, like Gecko) " +
-    "Chrome/139.0.0.0 Safari/537.36",
 };
 
 // ── تسجيل الدخول ─────────────────────────────────────────────────────────────
@@ -134,17 +130,9 @@ export function loginBot(account) {
           getBotName, saveBotName, createMqttConnectionManager,
         });
 
-        // ── Watchdog (جديد v4.0 — من fca-unofficial) ─────────────────────
-        const watchdog = new Watchdog({
-          api,
-          ctx:           api._ctx,
-          silenceMs:     5 * 60 * 1000,
-          onSilence:     () => api.__forceReconnect?.("watchdog-silence"),
-        });
-        watchdog.start();
-        api._watchdog = watchdog;
-
-        // ── مراقبة الصحة + تنبيه المشرف (جديد v4.0) ──────────────────────
+        // MqttConnectionManager is the single connection/watchdog owner. A
+        // second silence watchdog would mistake a quiet group for a dead socket.
+        // ── مراقبة الصحة + تنبيه المشرف ───────────────────────────────────
         try {
           const stopMonitor = startMonitoring(api, index, label);
           api._stopMonitor = stopMonitor;

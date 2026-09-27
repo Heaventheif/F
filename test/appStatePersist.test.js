@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const modulePath = fileURLToPath(new URL("../src/utils/appStatePersist.js", import.meta.url));
+const modulePath = fileURLToPath(new URL("../src/fca/appStatePersist.js", import.meta.url));
 const envKeys = ["FB_STATE_PATH", "STATE_DIR", "FCA_STATE_KEY", "STATE_ENCRYPT_KEY", "APPSTATE_SECRET", "APPSTATE"];
 
 test("AppState persistence honors Render path and secret settings", async () => {

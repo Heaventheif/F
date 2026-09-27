@@ -29,5 +29,5 @@
     "request": "npm:@cypress/request@4.0.1",
     "@vreden/youtube_scraper": "^1.2.9"
   },
-  "_hardened": "fcanew-r3nz75 merged v4.0 — secureStore+mergeOnSave+rateLimiter+watchdog+stealthMode+deviceManager+monitor"
+  "_hardened": "fcanew-r3nz75 merged v4.0 — secureStore+mergeOnSave+rateLimiter+fca-lifecycle+monitor"
 }

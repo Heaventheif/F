@@ -6,7 +6,7 @@
  */
 
 import fs   from "node:fs";
-import { STATE_FILE } from "../utils/appStatePersist.js";
+import { STATE_FILE } from "../fca/appStatePersist.js";
 
 const CHECK_MS  = (parseInt(process.env.MONITOR_INTERVAL_MIN ?? "15", 10) || 15) * 60_000;
 const DEDUP_MS  = 30 * 60_000;

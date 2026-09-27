@@ -45,9 +45,9 @@ const LAZY_REGISTRY = [
   ['user',       () => import('./src/cmds/user.js')],
   ['user',       () => import('./src/cmds/group.js')],
   ['user',       () => import('./src/cmds/unsend.js')],
-  // ── النواة (src/core/) ───────────────────────────────────────────────────
+  // ── FCA integration + core ───────────────────────────────────────────────
   ['config',     () => import('./src/config/index.js')],
-  ['core',       () => import('./src/core/Client.js')],
+  ['core',       () => import('./src/fca/Client.js')],
   ['core',       () => import('./src/core/Context.js')],
   ['core',       () => import('./src/core/Loader.js')],
   ['core',       () => import('./src/core/Router.js')],
@@ -61,7 +61,6 @@ const LAZY_REGISTRY = [
   ['server',     () => import('./src/webServer.js')],
   // ── الأدوات ──────────────────────────────────────────────────────────────
   ['utils',      () => import('./src/utils/banList.js')],
-  ['utils',      () => import('./src/utils/bot-enhancer.js')],
   ['utils',      () => import('./src/utils/cache.js')],
   ['utils',      () => import('./src/utils/concurrentDownload.js')],
   ['utils',      () => import('./src/utils/directSend.js')],
