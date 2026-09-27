@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { directSend } from "../utils/directSend.js";
+import { getFahimSurah } from "../utils/fahimProviders.js";
 const execFileAsync = promisify(execFile);
 const MP3QURAN_API = "https://www.mp3quran.net/api/v3";
 const SURAHS = [
@@ -309,6 +310,7 @@ export default {
     if (endAyah < startAyah) {
       return message.reply("❌ نهاية النطاق يجب أن تكون بعد بدايته (مثال: 1-14 وليس 14-1)");
     }
+    let allowBackup = true;
     try {
       const apiUrl = `https://api.alquran.cloud/v1/surah/${surahNum}/editions/quran-uthmani,ar.muyassar`;
       console.log(`[QURAN] 📖 السورة ${surahNum} - الآيات ${startAyah}-${endAyah}`);
@@ -327,19 +329,19 @@ export default {
       if (!Array.isArray(ayahs) || !Array.isArray(tafsirAyahs)) {
         throw new Error("بيانات غير مكتملة من الخادم");
       }
+      allowBackup = false;
       const totalAyahs = ayahs.length;
       if (startAyah > totalAyahs) {
         throw new Error(`سورة ${ayahEdition.name} تحتوي ${totalAyahs} آية فقط`);
       }
       endAyah = Math.min(endAyah, totalAyahs);
       const surahName = ayahEdition.name || "غير معروف";
-      const surahEnglishName = ayahEdition.englishName || "";
       const revelationType = ayahEdition.revelationType === "Meccan" ? "مكية 🕋" : "مدنية 🕌";
       const rangeLabel = startAyah === endAyah ? `الآية ${startAyah}` : `الآيات ${startAyah}-${endAyah}`;
       const header =
         `✨ **﴿ ${surahName} - ${rangeLabel} ﴾** \n` +
         `━─━─━─「◽」─━─━─━\n` +
-        `🕌 السورة: ${surahName} (${surahEnglishName}) | ${revelationType}\n` +
+        `🕌 السورة: ${surahName} | ${revelationType}\n` +
         `━─━─━─「◽」─━─━─━\n\n`;
       const blocks = [];
       for (let n = startAyah; n <= endAyah; n++) {
@@ -362,20 +364,49 @@ export default {
       }
       console.log(`[QURAN] ✅ تم إرسال: ${surahName} - ${rangeLabel} (${messages.length} رسالة)`);
     } catch (error) {
+      if (allowBackup) {
+        try {
+          const backup = await getFahimSurah(surahNum);
+          const totalAyahs = backup.ayahs.length;
+          if (startAyah > totalAyahs) throw new Error(`السورة تحتوي ${totalAyahs} آية فقط.`);
+          endAyah = Math.min(endAyah, totalAyahs);
+          const rangeLabel = startAyah === endAyah ? `الآية ${startAyah}` : `الآيات ${startAyah}-${endAyah}`;
+          const header =
+            `✨ **﴿ ${backup.name} - ${rangeLabel} ﴾**\n` +
+            `━─━─━─「◽」─━─━─━\n` +
+            `🕌 السورة: ${backup.name}\n` +
+            `ℹ️ المصدر الاحتياطي لا يوفر التفسير الميسر.\n` +
+            `━─━─━─「◽」─━─━─━\n\n`;
+          const blocks = [];
+          for (let n = startAyah; n <= endAyah; n++) {
+            const ayah = backup.ayahs.find(item => item.number === n);
+            if (!ayah?.text) throw new Error(`الآية ${n} غير متاحة في المصدر الاحتياطي.`);
+            blocks.push(`۝ **الآية ${n}:**\n« ${ayah.text} »\n\n`);
+          }
+          const messages = splitIntoMessages(header, blocks);
+          for (let i = 0; i < messages.length; i++) {
+            const partLabel = messages.length > 1 ? `\n\n(الجزء ${i + 1}/${messages.length})` : "";
+            await global.safeSend(api, messages[i] + partLabel, threadID, null, messageID);
+            if (i < messages.length - 1) await new Promise(resolve => setTimeout(resolve, 600));
+          }
+          console.warn(`[QURAN] استخدم المصدر الاحتياطي لسورة ${surahNum}`);
+          return;
+        } catch (backupError) {
+          console.warn("[QURAN] تعذر المصدر الاحتياطي:", backupError.message);
+        }
+      }
       console.error(`[QURAN] ❌ خطأ:`, {
         message: error.message,
         code: error.code,
         status: error.response?.status,
       });
-      let errorMsg = "حدث خطأ أثناء جلب الآيات";
+      let errorMsg = "تعذر جلب الآيات من المصدرين حالياً.";
       if (error.response?.status === 404) {
         errorMsg = `❌ لم يتم العثور على السورة أو الآيات المطلوبة.`;
       } else if (error.code === "ECONNABORTED") {
         errorMsg = "⏱️ انتهت مهلة الاتصال بالخادم";
       } else if (error.code === "ENOTFOUND") {
         errorMsg = "🌐 لا يوجد اتصال بالإنترنت";
-      } else if (error.message) {
-        errorMsg = `❌ ${error.message.substring(0, 150)}`;
       }
       await message.reply(errorMsg);
     }
