@@ -20,4 +20,4 @@ This directory contains the bot's integration boundary for `fcanew-r3nz75`.
 
 Keep credentials in Render environment variables or the encrypted AppState file; never commit them here.
 
-The administrative command `group unban` is allowed through the banned-group gate only for a configured developer. It clears the in-memory set and the connected ban database record; `group unban <GID>` can target another group.
+The administrative command `ban ungroup` is allowed through the banned-group gate only for a configured developer. It clears the in-memory set and the connected ban database record; `ban ungroup <GID>` can target another group.

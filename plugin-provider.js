@@ -44,6 +44,7 @@ const LAZY_REGISTRY = [
   ['media',      () => import('./src/cmds/img.js')],
   ['user',       () => import('./src/cmds/user.js')],
   ['user',       () => import('./src/cmds/group.js')],
+  ['user',       () => import('./src/cmds/ban.js')],
   ['user',       () => import('./src/cmds/unsend.js')],
   // ── FCA integration + core ───────────────────────────────────────────────
   ['config',     () => import('./src/config/index.js')],

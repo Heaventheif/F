@@ -5,12 +5,12 @@
 
 const _config = {
   name: "group",
-  version: "2.2.0",
+  version: "2.3.0",
   author: "dev",
   countDown: 5,
   role: 1,
   description: {
-    ar: "إدارة المجموعة: معلومات، إحصائيات، حظر وإزالة الحظر، تغيير الاسم، إدارة المشرفين",
+    ar: "إدارة المجموعة: معلومات، إحصائيات، تغيير الاسم، إدارة المشرفين",
   },
   category: "admin",
   guide: {
@@ -18,9 +18,6 @@ const _config = {
       "{pn} info               — معلومات المجموعة (GID + الأعضاء)\n" +
       "{pn} id                 — عرض GID فقط\n" +
       "{pn} stats              — إحصائيات المجموعة\n" +
-      "{pn} ban                — حظر المجموعة من البوت (مطور فقط)\n" +
-      "{pn} unban              — إزالة حظر المجموعة الحالية (مطور فقط)\n" +
-      "{pn} unban <GID>        — إزالة حظر مجموعة أخرى (مطور فقط)\n" +
       "{pn} rename <الاسم>     — تغيير اسم المجموعة\n" +
       "{pn} admin add @شخص    — إضافة مشرف\n" +
       "{pn} admin remove @شخص — إزالة مشرف",
@@ -42,12 +39,6 @@ export default {
         return api.sendMessage(String(threadID), threadID, null, messageID);
       case "stats":
         return handleStats(api, event);
-      case "ban":
-        return handleBan(api, event, Threads, role);
-      case "unban":
-      case "unblock":
-      case "removeban":
-        return handleUnban(api, event, Threads, role, args[1]);
       case "rename":
         return handleRename(api, event, args.slice(1).join(" "));
       case "admin":
@@ -128,51 +119,6 @@ async function handleStats(api, event) {
     `📅 آخر نشاط  : ${new Date(info.timestamp).toLocaleString("ar-EG")}`;
 
   api.sendMessage(msg, threadID, null, messageID);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  group ban  —  حظر المجموعة (مطور البوت فقط: role === 2)
-// ═══════════════════════════════════════════════════════════════════
-async function handleBan(api, event, Threads, role) {
-  const { threadID, messageID } = event;
-
-  if (role < 2) return;
-
-  try {
-    const data = await Threads.getData(threadID);
-    if (data.banned)
-      return api.sendMessage("⚠️ المجموعة محظورة بالفعل.", threadID, null, messageID);
-
-    await Threads.setData(threadID, { banned: true });
-    api.sendMessage(
-      `🚫 تم حظر المجموعة بنجاح.\nGID: ${threadID}`,
-      threadID,
-      null,
-      messageID
-    );
-  } catch {
-    api.sendMessage("❌ فشل حظر المجموعة.", threadID, null, messageID);
-  }
-}
-
-async function handleUnban(api, event, Threads, role, requestedID) {
-  const { threadID, messageID } = event;
-  if (role < 2) return;
-  const targetID = String(requestedID || threadID).trim();
-  if (!/^\d{6,}$/.test(targetID))
-    return api.sendMessage("⚠️ أدخل GID صحيحاً (أرقام فقط).", threadID, null, messageID);
-
-  try {
-    const data = await Threads.getData(targetID);
-    if (!data?.banned && !global._bannedGroups?.has(targetID))
-      return api.sendMessage(`ℹ️ المجموعة غير محظورة.\nGID: ${targetID}`, threadID, null, messageID);
-
-    await Threads.setData(targetID, { banned: false, unbannedBy: String(event.senderID ?? "") });
-    return api.sendMessage(`✅ تمت إزالة حظر المجموعة.\nGID: ${targetID}`, threadID, null, messageID);
-  } catch (err) {
-    console.warn(`[GROUP:UNBAN] ${targetID}`, err?.message || err);
-    return api.sendMessage("❌ تعذّرت إزالة الحظر؛ راجع اتصال قاعدة البيانات ثم حاول مجدداً.", threadID, null, messageID);
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════

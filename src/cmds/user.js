@@ -5,12 +5,12 @@
 
 const _config = {
   name: "user",
-  version: "2.1.0",
+  version: "2.2.0",
   author: "dev",
   countDown: 5,
   role: 1,
   description: {
-    ar: "إدارة المستخدمين: معرف، اسم، طرد، حظر، إضافة",
+    ar: "إدارة المستخدمين: معرف، اسم، طرد، إضافة",
   },
   category: "admin",
   guide: {
@@ -18,7 +18,6 @@ const _config = {
       "{pn} id @شخص          — عرض UID الشخص\n" +
       "{pn} name @شخص <اسم>  — تغيير اللقب\n" +
       "{pn} kick @شخص        — طرد من المجموعة\n" +
-      "{pn} ban @شخص         — حظر المستخدم من البوت (مطور فقط)\n" +
       "{pn} add <UID>         — إضافة مستخدم للمجموعة",
   },
 };
@@ -38,8 +37,6 @@ export default {
         return handleName(api, event, args.slice(1));
       case "kick":
         return handleKick(api, event, args.slice(1));
-      case "ban":
-        return handleBan(api, event, Users, role, args.slice(1));
       case "add":
         return handleAdd(api, event, args.slice(1));
       default:
@@ -147,37 +144,6 @@ async function handleKick(api, event, args = []) {
       results.push(`✅ تم طرد ${name} — ${uid}`);
     } catch {
       results.push(`❌ فشل طرد ${uid} — تحقق من صلاحيات البوت`);
-    }
-  }
-
-  api.sendMessage(results.join("\n"), threadID, null, messageID);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  user ban  —  حظر المستخدم من البوت (مطور البوت فقط: role === 2)
-// ═══════════════════════════════════════════════════════════════════
-async function handleBan(api, event, Users, role, args = []) {
-  const { threadID, messageID } = event;
-
-  if (role < 2) return;
-
-  const targets = targetIDs(event, args);
-  if (!targets.length)
-    return api.sendMessage("⚠️ قم بمنشن الشخص المراد حظره.", threadID, null, messageID);
-
-  const results = [];
-  for (const uid of targets) {
-    try {
-      const data = await Users.getData(uid);
-      if (data?.banned) {
-        results.push(`⚠️ ${uid} محظور بالفعل.`);
-        continue;
-      }
-      await Users.setData(uid, { banned: true });
-      const name = await resolvedName(api, event, uid);
-      results.push(`🚫 تم حظر ${name} — ${uid}`);
-    } catch {
-      results.push(`❌ فشل حظر ${uid}`);
     }
   }
 
