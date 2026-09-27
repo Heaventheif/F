@@ -18,6 +18,7 @@ RUN apk add --no-cache ffmpeg
 
 ENV NODE_ENV=production
 ENV PORT=10000
+ENV STATE_DIR=/app/data
 
 # Non-privileged user — reduces attack surface
 RUN addgroup -S botgroup && adduser -S botuser -G botgroup

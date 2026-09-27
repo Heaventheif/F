@@ -29,9 +29,6 @@ import { startMonitoring } from "./monitor.js";
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.join(MODULE_DIR, "..", "..");
 
-const STATE_DIR  = process.env.STATE_DIR || "/var/data";
-const STATE_FILE = path.join(STATE_DIR, "appstate.enc");
-
 // ── أسماء البوت ─────────────────────────────────────────────────────────────
 const BOT_NAMES_FILE = path.join(PROJECT_ROOT, "botNames.json");
 

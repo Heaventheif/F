@@ -24,8 +24,8 @@ const SESSION_COOKIES     = ["c_user", "xs", "fr", "sb", "datr", "wd", "locale"]
 const CRITICAL_COOKIES    = ["c_user", "xs"];
 const REFRESHABLE_COOKIES = ["fr", "sb"];
 
-const STATE_DIR  = process.env.STATE_DIR  || "/var/data";
-const STATE_FILE = path.join(STATE_DIR, "appstate.enc");
+export const STATE_FILE = process.env.FB_STATE_PATH ||
+  path.join(process.env.STATE_DIR || path.resolve(process.cwd(), "data"), "appstate.enc");
 const ALGO       = "aes-256-gcm";
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -44,7 +44,11 @@ export function readPersistedAppState() {
 
 // ── تشفير AES-256-GCM ──────────────────────────────────────────────────────
 function _getKey() {
-  const k = process.env.FCA_STATE_KEY || process.env.STATE_ENCRYPT_KEY || "";
+  const k =
+    process.env.FCA_STATE_KEY ||
+    process.env.STATE_ENCRYPT_KEY ||
+    process.env.APPSTATE_SECRET ||
+    "";
   if (k.length < 32) return null;
   return crypto.createHash("sha256").update(k, "utf8").digest();
 }

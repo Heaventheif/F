@@ -26,7 +26,7 @@
  */
 
 import fs   from "fs";
-import path from "path";
+import { STATE_FILE } from "../src/utils/appStatePersist.js";
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -38,11 +38,8 @@ function arg(name, fallback) {
 const HOURS     = parseFloat(arg("hours", "24"));
 const THREAD_ID = arg("thread", process.env.SOAK_TEST_THREAD ?? "");
 const END_MS    = Date.now() + HOURS * 3_600_000;
-const STATE_DIR = process.env.STATE_DIR ?? "/var/data";
-const STATE_FILE = path.join(STATE_DIR, "appstate.enc");
 
 // ── State ─────────────────────────────────────────────────────────────────────
-
 let _failures     = 0;
 let _checkCount   = 0;
 let _selfSends    = 0;

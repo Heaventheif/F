@@ -6,10 +6,7 @@
  */
 
 import fs   from "node:fs";
-import path from "node:path";
-
-const STATE_DIR  = process.env.STATE_DIR || "/var/data";
-const STATE_FILE = path.join(STATE_DIR, "appstate.enc");
+import { STATE_FILE } from "../utils/appStatePersist.js";
 
 const CHECK_MS  = (parseInt(process.env.MONITOR_INTERVAL_MIN ?? "15", 10) || 15) * 60_000;
 const DEDUP_MS  = 30 * 60_000;
