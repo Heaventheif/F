@@ -3,53 +3,104 @@ import fs from "fs-extra";
 import os from "os";
 import path from "path";
 import http from "./fetchHttp.js";
-import { searchVideos, downloadAudio, downloadVideo, normalizeYoutubeUrl } from "./ytEngine.js";
+import vreden from "@vreden/youtube_scraper";
+
 async function streamToTempFile(url, prefix, ext) {
   const filePath = path.join(os.tmpdir(), `${prefix}_${Date.now()}.${ext}`);
-  const response = await http.get(url, { responseType: "stream", timeout: 120000 });
+  const response = await http.get(url, {
+    responseType: "stream",
+    timeout: 120000,
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
   const writer = fs.createWriteStream(filePath);
   response.data.pipe(writer);
   await new Promise((resolve, reject) => {
     writer.on("finish", resolve);
     writer.on("error", reject);
+    response.data.on("error", reject);
   });
   const stat = await fs.stat(filePath);
-  if (stat.size === 0) { await fs.remove(filePath).catch(() => {}); throw new Error("الملف فارغ."); }
+  if (stat.size === 0) {
+    await fs.remove(filePath).catch(() => {});
+    throw new Error("الملف فارغ.");
+  }
   return filePath;
 }
-const engineProvider = {
-  name: "engine",
-  async search(query, limit) {
-    const results = await searchVideos(query, limit);
-    if (!results?.length) throw new Error("لا توجد نتائج");
-    return results;
+
+function normalizeSearchResult(item) {
+  if (!item || typeof item !== "object") return null;
+  const url = item.url || (item.videoId
+    ? `https://www.youtube.com/watch?v=${item.videoId}`
+    : null);
+  if (!url) return null;
+  return {
+    url,
+    title: item.title || item.name || "YouTube video",
+    duration: item.duration?.seconds || item.seconds || item.duration || 0,
+    uploader: item.author?.name || item.author || item.channel?.name || item.channel || "",
+    thumbnail: item.thumbnail || item.image || item.bestThumbnail?.url || null,
+    views: item.views || item.viewCount || 0,
+  };
+}
+
+const vredenProvider = {
+  name: "vreden-youtube-scraper",
+
+  async search(query, limit = 10) {
+    const result = await vreden.search(query);
+    if (!result?.status || !Array.isArray(result.results)) {
+      throw new Error(result?.message || "لا توجد نتائج من Vreden");
+    }
+    const items = result.results.map(normalizeSearchResult).filter(Boolean).slice(0, limit);
+    if (!items.length) throw new Error("لا توجد نتائج");
+    return items;
   },
+
   async download(url, wantMp4) {
-    const dl = wantMp4 ? await downloadVideo(url) : await downloadAudio(url);
+    const result = wantMp4
+      ? await vreden.ytmp4(url, 360)
+      : await vreden.ytmp3(url, 128);
+    if (!result?.status || !result.download?.url) {
+      throw new Error(result?.message || "لم يُرجع Vreden رابط تحميل");
+    }
+    const metadata = result.metadata || {};
+    const filePath = await streamToTempFile(
+      result.download.url,
+      "vreden-yt",
+      wantMp4 ? "mp4" : "mp3",
+    );
     return {
-      filePath: dl.filePath,
-      title: dl.title || "media",
-      duration: dl.duration || 0,
-      uploader: dl.uploader || "",
+      filePath,
+      title: metadata.title || result.download.filename || "YouTube media",
+      duration: metadata.seconds || metadata.duration || 0,
+      uploader: metadata.author?.name || metadata.author || "",
     };
   },
 };
+
 const YT_DLP_STREAM_BASE = "https://yt-dlp-stream.onrender.com/api";
-function parseYtDlpStreamResult(d) {
-  if (!d || typeof d !== "object") return { title: "بدون عنوان", author: "", mp4Url: null, mp3Url: null };
-  const m = (d.media && typeof d.media === "object" && !Array.isArray(d.media)) ? d.media : {};
-  const getUrl = (f) => (typeof f === "string" ? f : (f && typeof f.url === "string" ? f.url : null));
+function parseYtDlpStreamResult(data) {
+  if (!data || typeof data !== "object") {
+    return { title: "بدون عنوان", author: "", mp4Url: null, mp3Url: null };
+  }
+  const media = data.media && typeof data.media === "object" && !Array.isArray(data.media)
+    ? data.media
+    : {};
+  const getUrl = value => typeof value === "string"
+    ? value
+    : value && typeof value.url === "string" ? value.url : null;
   return {
-    title: d.title || "بدون عنوان",
-    author: d.author || d.channel || "",
-    mp4Url: getUrl(m.mp4) || getUrl(d.mp4) || null,
-    mp3Url: getUrl(m.mp3) || getUrl(d.mp3) || null,
+    title: data.title || "بدون عنوان",
+    author: data.author || data.channel || "",
+    mp4Url: getUrl(media.mp4) || getUrl(data.mp4),
+    mp3Url: getUrl(media.mp3) || getUrl(data.mp3),
   };
 }
+
 const ytDlpStreamProvider = {
   name: "yt-dlp-stream",
   async search(query, limit) {
-    const url = `${YT_DLP_STREAM_BASE}/v3/q?=${encodeURIComponent(query)}&?=${limit}`;
+    const url = `${YT_DLP_STREAM_BASE}/v3/q?query=${encodeURIComponent(query)}&limit=${limit}`;
     const res = await http.get(url, { timeout: 25000 });
     const data = res.data;
     const list = Array.isArray(data) ? data
@@ -57,71 +108,62 @@ const ytDlpStreamProvider = {
       : Array.isArray(data?.data) ? data.data
       : [];
     if (!list.length) throw new Error("لا توجد نتائج");
-    return list.map(v => ({ ...v, url: v.url || v.short_url }));
+    return list.map(item => normalizeSearchResult(item)).filter(Boolean);
   },
   async download(url, wantMp4) {
-    const resolveUrl = `${YT_DLP_STREAM_BASE}/v2/q?=${encodeURIComponent(url)}`;
-    const res = await http.get(resolveUrl, { timeout: 30000 });
+    const res = await http.get(`${YT_DLP_STREAM_BASE}/v2/q`, {
+      params: { url },
+      timeout: 30000,
+    });
     const raw = Array.isArray(res.data) ? res.data[0] : res.data;
     const parsed = parseYtDlpStreamResult(raw || {});
     const mediaUrl = wantMp4 ? parsed.mp4Url : parsed.mp3Url;
     if (!mediaUrl) throw new Error("الرابط غير متاح عبر هذا المزوّد");
-    const filePath = await streamToTempFile(mediaUrl, "yt2", wantMp4 ? "mp4" : "mp3");
+    const filePath = await streamToTempFile(mediaUrl, "yt-dlp", wantMp4 ? "mp4" : "mp3");
     return { filePath, title: parsed.title, duration: 0, uploader: parsed.author };
   },
 };
-const CCPROJECT_BASE = "https://ccproject.serv00.net/ytdl2.php";
-const ccProjectProvider = {
-  name: "ccproject",
-  search: (query, limit) => ytDlpStreamProvider.search(query, limit),
-  async download(url, wantMp4) {
-    const type = wantMp4 ? "mp4" : "mp3";
-    const res = await http.get(CCPROJECT_BASE, { params: { url, type }, timeout: 30000 });
-    const data = res.data;
-    if (!data || typeof data !== "object") throw new Error("استجابة غير متوقعة من الـ API الخارجي");
-    if (!data.download) throw new Error(data.error || "لم يُرجع الـ API رابط تحميل");
-    const filePath = await streamToTempFile(data.download, "ydl", type);
-    return { filePath, title: data.title || "بدون عنوان", duration: 0, uploader: "" };
-  },
-};
-export const providers = [engineProvider, ytDlpStreamProvider, ccProjectProvider];
-export async function searchWithFallback(query, limit) {
+
+const providers = [vredenProvider, ytDlpStreamProvider];
+
+export { providers };
+
+export async function searchWithFallback(query, limit = 10) {
   const errors = [];
-  const tried = new Set();
   for (const provider of providers) {
-    if (tried.has(provider.search)) continue;
-    tried.add(provider.search);
     try {
       return await provider.search(query, limit);
-    } catch (e) {
-      errors.push(`${provider.name}: ${e.message}`);
+    } catch (error) {
+      errors.push(`${provider.name}: ${error.message}`);
     }
   }
   throw new Error(errors.join(" | ") || "تعذّر البحث عبر جميع المزوّدين");
 }
+
 export async function downloadWithFallback(url, wantMp4) {
-  const normalizedUrl = normalizeYoutubeUrl(url);
-  const attempts = providers.map(async (provider) => {
-    const result = await provider.download(normalizedUrl, wantMp4);
-    return { ...result, provider: provider.name };
-  });
-  try {
-    return await Promise.any(attempts);
-  } catch (aggErr) {
-    const msgs = aggErr.errors?.map((e, i) => `${providers[i]?.name ?? i}: ${e.message}`).join(" | ")
-      || "تعذّر التحميل عبر جميع المزوّدين";
-    throw new Error(msgs);
+  const errors = [];
+  for (const provider of providers) {
+    try {
+      const result = await provider.download(url, wantMp4);
+      return { ...result, provider: provider.name };
+    } catch (error) {
+      errors.push(`${provider.name}: ${error.message}`);
+    }
   }
+  throw new Error(errors.join(" | ") || "تعذّر التحميل عبر جميع المزوّدين");
 }
+
 export async function cleanTemp(filePath) {
-  try { if (filePath && await fs.pathExists(filePath)) await fs.remove(filePath); } catch (_) {}
+  try {
+    if (filePath && await fs.pathExists(filePath)) await fs.remove(filePath);
+  } catch (_) {}
 }
 
 // ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */
 export const $plugin = {
-  name: 'xx-utils-yt-providers',
-  meta: { category: 'utils', path: 'src/utils/ytProviders.js' },
+  name: "xx-utils-yt-providers",
+  meta: { category: "utils", path: "src/utils/ytProviders.js" },
   setup(_ctx) {
     // provides: cleanTemp, downloadWithFallback, providers, searchWithFallback
   },

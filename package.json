@@ -25,7 +25,8 @@
     "fcanew-r3nz75": "^10.1.15",
     "fs-extra": "^11.3.6",
     "google-translate-api-x": "^10.7.3",
-    "mongoose": "^9.7.4"
+    "mongoose": "^9.7.4",
+    "@vreden/youtube_scraper": "^1.2.9"
   },
   "_hardened": "fcanew-r3nz75 merged v4.0 — secureStore+mergeOnSave+rateLimiter+watchdog+stealthMode+deviceManager+monitor"
 }

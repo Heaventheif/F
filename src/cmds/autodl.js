@@ -141,7 +141,58 @@ async function sendLocalFile(api, threadID, filePath, title, replyToID) {
     return false;
   }
 }
-// TikTok — عبر Yozora/yt-dlp لتجنب مكتبات TikTok غير المدعومة.
+// All Site Download — fallback عام، لأن الإصدارات v1-v18 ليست متطابقة.
+const ALL_SITE_API = "https://smfahim.xyz/download/all";
+function parseAllSiteResponse(payload, platform = "generic") {
+  const root = payload?.data?.data || payload?.data || payload || {};
+  if (root.status === false || payload?.status === false) {
+    throw new Error(root.message || payload?.message || "الرابط غير مدعوم أو خاص");
+  }
+  const result = root.result || payload?.result || {};
+  const links = root.links || result.links || {};
+  const firstUrl = values => values.flat(Infinity).find(value =>
+    typeof value === "string" && /^https?:\/\//i.test(value)
+  ) || null;
+  const videoItems = [result.video, result.media, root.video, root.media].filter(Boolean);
+  const imageItems = [result.image, result.images, root.image, root.images].filter(Boolean);
+  const videoUrl = root.hd || root.high || links.hd || root.video_url ||
+    links.video || root.video || links.sd || root.sd || root.url ||
+    firstUrl(videoItems.map(item => Array.isArray(item) ? item.map(x => x?.video || x?.url || x?.link || x) : item));
+  const audioUrl = root.audio || root.mp3 || links.audio || links.mp3 ||
+    firstUrl([result.audio, result.audio_url]);
+  const images = imageItems.flat(Infinity).map(item =>
+    typeof item === "string" ? item : item?.image || item?.url || item?.link
+  ).filter(value => /^https?:\/\//i.test(value || ""));
+  if (!videoUrl && !audioUrl && !images.length) {
+    throw new Error("All Site: لم يُرجع رابط وسائط");
+  }
+  return {
+    title: root.title || result.title || root.name || "وسائط",
+    videoUrl: typeof videoUrl === "string" ? videoUrl : null,
+    audioUrl: typeof audioUrl === "string" ? audioUrl : null,
+    images: images.length ? images : null,
+    thumbnail: root.thumbnail || root.thumb || null,
+    platform,
+  };
+}
+async function resolveAllSite(url, platform = "generic") {
+  const versions = platform === "pinterest" ? [18, 1] : [1, 18];
+  const errors = [];
+  for (const version of versions) {
+    try {
+      const { data } = await http.get(`${ALL_SITE_API}/v${version}`, {
+        params: { url },
+        timeout: 45000,
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+      });
+      return parseAllSiteResponse(data, platform);
+    } catch (error) {
+      errors.push(`v${version}: ${error.message}`);
+    }
+  }
+  throw new Error(errors.join(" | "));
+}
+// TikTok — عبر Yozora/yt-dlp؛ YouTube يمر عبر Vreden داخل ytProviders.
 async function resolveTikTok(url) {
   try {
     const info = await getYozoraInfo(url);
@@ -154,38 +205,90 @@ async function resolveTikTok(url) {
     throw new Error(`فشل تنزيل TikTok عبر Yozora: ${error.message}`);
   }
 }
-// Instagram — باستخدام smfahim.xyz API
-async function resolveInstagram(url) {
-  const API_BASE = "https://smfahim.xyz/api/v2/dl";
-  const res = await fetch(`${API_BASE}?url=${encodeURIComponent(url)}`, {
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`فشل الاتصال بـ smfahim (HTTP ${res.status})`);
-  const json = await res.json();
-  if (json?.status === false || json?.success === false) {
-    throw new Error(json?.message || "المنشور خاص أو الرابط غير صحيح");
+// Instagram Reels — استخراج مباشر من الصفحة العامة مع API احتياطي.
+function decodeInstagramValue(value) {
+  return String(value || "")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#x2F;/gi, "/")
+    .replace(/\\u003D/gi, "=")
+    .trim();
+}
+function readInstagramMeta(html, keys) {
+  const wanted = new Set(keys.map(key => key.toLowerCase()));
+  for (const match of String(html || "").matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0];
+    const attrs = {};
+    for (const attr of tag.matchAll(/([:\w-]+)\s*=\s*["']([^"']*)["']/gi)) {
+      attrs[attr[1].toLowerCase()] = attr[2];
+    }
+    const key = (attrs.property || attrs.name || "").toLowerCase();
+    if (wanted.has(key) && attrs.content) return decodeInstagramValue(attrs.content);
   }
-  const extractMedia = (obj) => {
-    if (obj?.links && typeof obj.links === "object") {
-      const { hd, sd, url, video } = obj.links;
-      return hd || sd || url || video;
+  return null;
+}
+function extractInstagramMedia(payload) {
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload || {});
+  const htmlVideo = readInstagramMeta(text, ["og:video:secure_url", "og:video", "og:video:url"]);
+  const candidates = [
+    htmlVideo,
+    ...[...text.matchAll(/"(?:video_url|playback_url)"\s*:\s*"([^"\\]+(?:\\.[^"\\]*)?)"/gi)].map(m => m[1]),
+    ...[...text.matchAll(/"video_versions"\s*:\s*\[[\s\S]*?"url"\s*:\s*"([^"\\]+)"/gi)].map(m => m[1]),
+  ].map(decodeInstagramValue).filter(value => /^https?:\/\//i.test(value));
+  const mediaUrl = candidates.find(value => /\.(?:mp4)(?:[?#]|$)/i.test(value)) || candidates[0] || null;
+  const title = readInstagramMeta(text, ["og:title", "twitter:title"])
+    || text.match(/"(?:title|caption)"\s*:\s*"([^"\\]*)"/i)?.[1]
+    || "Instagram Reel";
+  return mediaUrl ? { mediaUrl, title: decodeInstagramValue(title) } : null;
+}
+async function resolveInstagram(url) {
+  const errors = [];
+  const pageUrls = [url];
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("__a", "1");
+    parsed.searchParams.set("__d", "dis");
+    pageUrls.push(parsed.toString());
+  } catch (_) {}
+  for (const pageUrl of pageUrls) {
+    try {
+      const { data } = await http.get(pageUrl, {
+        responseType: "text",
+        timeout: 25000,
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+          Referer: "https://www.instagram.com/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+        },
+      });
+      const media = extractInstagramMedia(data);
+      if (media?.mediaUrl) {
+        return { title: media.title, videoUrl: media.mediaUrl, platform: "instagram" };
+      }
+      errors.push("Instagram: لم يوجد رابط فيديو عام في الصفحة");
+    } catch (error) {
+      errors.push(`Instagram page: ${error.message}`);
     }
-    const data = obj?.data ?? obj?.result ?? obj;
-    const item = Array.isArray(data) ? data[0] : data;
-    if (item?.links) {
-      const { hd, sd, url } = item.links;
-      return hd || sd || url;
+  }
+  // Legacy public API fallback; it may be unavailable, so never use it as the only route.
+  try {
+    const API_BASE = "https://smfahim.xyz/api/v2/dl";
+    const res = await fetch(`${API_BASE}?url=${encodeURIComponent(url)}`, {
+      signal: AbortSignal.timeout(20000),
+      headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const media = extractInstagramMedia(json);
+    if (media?.mediaUrl) {
+      return { title: media.title, videoUrl: media.mediaUrl, platform: "instagram" };
     }
-    return item?.url || item?.video_url || item?.videoUrl ||
-           item?.download_url || item?.downloadUrl || item?.media_url ||
-           item?.hd || item?.sd;
-  };
-  const mediaUrl = extractMedia(json);
-  if (!mediaUrl) throw new Error("لم يُعثر على رابط الوسائط");
-  const title = json?.title || json?.data?.title || json?.result?.title ||
-                (Array.isArray(json?.data) ? json.data[0]?.title : null) ||
-                "فيديو انستغرام";
-  return { title, videoUrl: mediaUrl, platform: "instagram" };
+    errors.push("Instagram API: لم يُرجع رابط فيديو");
+  } catch (error) {
+    errors.push(`Instagram API: ${error.message}`);
+  }
+  throw new Error(errors.join(" | ") || "تعذّر تنزيل Instagram Reel");
 }
 async function resolveYouTube(url) {
   try {
@@ -197,7 +300,7 @@ async function resolveYouTube(url) {
       isFile: true,     
     };
   } catch (e) {
-    throw new Error(`فشل تحميل يوتيوب: ${e.message}`);
+    throw new Error(`فشل تحميل يوتيوب عبر Vreden: ${e.message}`);
   }
 }
 async function resolveMetaMedia(url) {
@@ -444,25 +547,37 @@ async function resolveGeneric(url) {
     platform: "generic",
   };
 }
+async function resolveWithAllSiteFallback(url, platform, primary) {
+  try {
+    return await primary();
+  } catch (primaryError) {
+    try {
+      console.warn(`[AUTODL] ${platform || "generic"} primary failed; trying All Site`);
+      return await resolveAllSite(url, platform || "generic");
+    } catch (fallbackError) {
+      throw new Error(`${primaryError.message} | All Site: ${fallbackError.message}`);
+    }
+  }
+}
 async function resolveMedia(url) {
   const normalizedUrl = await normalizeMediaUrl(url);
   const platform = detectPlatform(normalizedUrl);
   switch (platform) {
-    case "tiktok":      return resolveTikTok(normalizedUrl);
-    case "youtube":     return resolveYouTube(normalizedUrl);
-    case "instagram":   return resolveInstagram(normalizedUrl);
-    case "facebook":    return resolveMetaMedia(normalizedUrl);
-    case "twitter":     return resolveTwitter(normalizedUrl);
-    case "reddit":      return resolveReddit(normalizedUrl);
-    case "pinterest":   return resolvePinterest(normalizedUrl);
-    case "threads":     return resolveThreads(normalizedUrl);
-    case "soundcloud":  return resolveSoundCloud(normalizedUrl);
-    case "spotify":     return resolveSpotify(normalizedUrl);
-    case "snapchat":    return resolveSnapchat(normalizedUrl);
-    case "capcut":      return resolveCapCut(normalizedUrl);
-    case "dailymotion": return resolveDailymotion(normalizedUrl);
-    case "bluesky":     return resolveBluesky(normalizedUrl);
-    default:            return resolveGeneric(normalizedUrl);
+    case "tiktok":      return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveTikTok(normalizedUrl));
+    case "youtube":     return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveYouTube(normalizedUrl));
+    case "instagram":   return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveInstagram(normalizedUrl));
+    case "facebook":    return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveMetaMedia(normalizedUrl));
+    case "twitter":     return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveTwitter(normalizedUrl));
+    case "reddit":      return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveReddit(normalizedUrl));
+    case "pinterest":   return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolvePinterest(normalizedUrl));
+    case "threads":     return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveThreads(normalizedUrl));
+    case "soundcloud":  return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveSoundCloud(normalizedUrl));
+    case "spotify":     return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveSpotify(normalizedUrl));
+    case "snapchat":    return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveSnapchat(normalizedUrl));
+    case "capcut":      return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveCapCut(normalizedUrl));
+    case "dailymotion": return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveDailymotion(normalizedUrl));
+    case "bluesky":     return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveBluesky(normalizedUrl));
+    default:            return resolveWithAllSiteFallback(normalizedUrl, platform, () => resolveGeneric(normalizedUrl));
   }
 }
 async function downloadImages(urls) {
