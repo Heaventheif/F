@@ -98,7 +98,7 @@ const GLOBAL_OPTIONS = {
   selfListen:     false,
   listenEvents:   true,
   forceLogin:     false,
-  autoMarkRead:   false,
+  autoMarkRead:   true,
   updatePresence: false,
   autoReconnect:  true,
   online:         true,

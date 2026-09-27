@@ -101,7 +101,7 @@ export async function initBotLifecycle(api, botIndex, opts = {}) {
       listenEvents:   true,
       updatePresence: false,
       autoReconnect:  true,
-      autoMarkRead:   false,
+      autoMarkRead:   true,
       listenTyping:   false,
     });
   } catch (_) {}

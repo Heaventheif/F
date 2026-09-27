@@ -1,5 +1,6 @@
 "use strict";
 import { handleMessage, handleEvent, handleReaction, invalidateThreadInfoCache } from "../core/Router.js";
+import { isGroupUnbanRequest } from "../utils/banList.js";
 // dashboard مُزال — stub functions
 const recordStoryEvent  = () => {};
 const recordFriendEvent = () => {};
@@ -101,7 +102,9 @@ function detectFriendEvent(event) {
 }
 
 export function dispatchMqttEvent(api, event, label, acceptedThreads) {
-  if (global.isBanned(event.threadID, event.senderID ?? event.userID)) return;
+  const threadBanned = global._bannedGroups?.has(String(event.threadID));
+  const senderBanned = global._bannedUsers?.has(String(event.senderID ?? event.userID));
+  if (senderBanned || (threadBanned && !isGroupUnbanRequest({ ...event, api }))) return;
 
   // Group-only policy: ignore DMs and message requests without replying or accepting them.
   if (!event.isGroup) return;
@@ -128,30 +131,6 @@ export function dispatchMqttEvent(api, event, label, acceptedThreads) {
   detectFriendEvent(event);
 
   if (["message", "message_reply", "log", "event"].includes(event.type)) {
-    // تمييز الرسالة كمقروءة — نؤخّره 800ms لضمان أن mqttClient جاهز بعد listenMqtt
-    if (["message", "message_reply"].includes(event.type) && event.threadID) {
-      // BUG-06 FIX: فحص __lifecycleStopped يمنع race condition إذا أُوقف البوت
-      // خلال الـ 800ms قبل تنفيذ markAsRead
-      setTimeout(() => {
-        if (api.__lifecycleStopped) return;
-        try {
-          if (typeof api.markAsRead === "function") {
-            api.markAsRead(event.threadID, true, (err) => {
-              // Suppress "Connection closed" noise — these are expected during MQTT
-              // reconnect cycles and carry no actionable information. Any other
-              // markAsRead error is still worth surfacing.
-              if (err) {
-                const msg = err.message || String(err);
-                if (!/connection closed/i.test(msg))
-                  console.warn(`[MARK-READ:${label}]`, msg);
-              }
-            });
-          }
-        } catch (e) {
-          console.warn(`[MARK-READ:${label}]`, e.message);
-        }
-      }, 800);
-    }
     // Route through bounded queue — prevents unbounded parallelism and ensures
     // every async path has a top-level catch that never terminates the process.
     _enqueue(async () => {

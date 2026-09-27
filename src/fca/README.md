@@ -19,3 +19,5 @@ This directory contains the bot's integration boundary for `fcanew-r3nz75`.
 `fcanew-r3nz75` owns Facebook transport and its supported reconnect behavior. The bot adds bounded command concurrency, conservative per-thread send pacing, encrypted persistence, and observability. It does not spoof devices, rotate user agents, simulate activity, or attempt to bypass platform enforcement.
 
 Keep credentials in Render environment variables or the encrypted AppState file; never commit them here.
+
+The administrative command `group unban` is allowed through the banned-group gate only for a configured developer. It clears the in-memory set and the connected ban database record; `group unban <GID>` can target another group.
