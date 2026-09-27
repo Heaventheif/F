@@ -29,7 +29,8 @@ COPY --chown=botuser:botgroup --from=deps /app/node_modules ./node_modules
 COPY --chown=botuser:botgroup . .
 
 # Writable runtime directories — appstate, db, tmp media
-RUN mkdir -p /app/data /app/temp && chown -R botuser:botgroup /app/data /app/temp
+RUN mkdir -p /app/data /app/temp /app/Fca_Database \
+    && chown -R botuser:botgroup /app/data /app/temp /app/Fca_Database
 
 USER botuser
 
