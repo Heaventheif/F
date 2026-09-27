@@ -32,7 +32,7 @@ function buildChecks(projectRoot) {
       level: "warn",
       key: "HF_SPACE_URL",
       label: "HF_SPACE_URL",
-      message: "أوامر chess/fb/gemini/groq/manga/novel/pin/song/sub/tts لن تعمل",
+      message: "أوامر chess/fb/gemini/groq/manga/novel/pin/song/tts لن تعمل",
     },
     {
       level: "warn",

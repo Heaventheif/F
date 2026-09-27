@@ -4,6 +4,7 @@ import path from "path";
 import http from "../utils/fetchHttp.js";
 import { getHfBase, getInternalToken } from "../utils/hfClient.js";
 import { loadCtx as _loadCtx, saveCtx as _saveCtx, clearCtx } from "../utils/sharedSession.js";
+import { formatGroupTurn, resolveGroupUsername } from "../utils/groupConversation.js";
 const COLLECTION = "groq_sessions";
 const loadCtx = (id) => _loadCtx(COLLECTION, id);
 const saveCtx = (id, msgs) => _saveCtx(COLLECTION, id, msgs);
@@ -60,16 +61,6 @@ function detectAttachment(event) {
   }
   return null;
 }
-function sanitizeName(name) {
-  if (!name) return "مستخدم";
-  const clean = String(name)
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .replace(/[[\]{}<>`]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 40);
-  return clean || "مستخدم";
-}
 // Call backend service with messages and root-level attachment support
 async function callHF(messages, attachment, prompt, wantsVoice) {
   const body = { messages };
@@ -110,7 +101,7 @@ async function sendVoiceReply(api, threadID, messageID, audioBase64, format = "w
   }
 }
 async function handle(api, event, prompt, registerReply) {
-  const { threadID, messageID, senderID } = event;
+  const { threadID, messageID } = event;
   const sessionKey = threadID;
   // إذا كان المستخدم يرد على رسالة نصية، أضف نصها كسياق
   const repliedBody = event.messageReply?.body?.trim();
@@ -133,14 +124,7 @@ async function handle(api, event, prompt, registerReply) {
       threadID, null, messageID
     );
   }
-  let senderName = senderID;
-  try {
-    const userInfo = await new Promise((res, rej) =>
-      api.getUserInfo(senderID, (err, data) => err ? rej(err) : res(data))
-    );
-    senderName = userInfo?.[senderID]?.name || senderID;
-  } catch (_) {}
-  senderName = sanitizeName(senderName);
+  const senderName = await resolveGroupUsername(api, event);
   let statusMsgId = null;
   try {
     const sent = await new Promise((resolve, reject) =>
@@ -161,7 +145,7 @@ async function handle(api, event, prompt, registerReply) {
   const ctx = await loadCtx(sessionKey);
   const displayPrompt = prompt.trim() || (attachment?.kind === "audio" ? "فرّغ هذا الصوت" : attachment?.kind === "video" ? "حلل هذا الفيديو" : "وصف هذه الصورة");
   const attPrefix = attachment ? `[${attachment.kind === "image" ? "صورة" : attachment.kind === "audio" ? "صوت" : "فيديو"}] ` : "";
-  const userContent = `[${senderName}]: ${attPrefix}${displayPrompt}`.trim();
+  const userContent = formatGroupTurn(senderName, `${attPrefix}${displayPrompt}`);
   let userMsg;
   let rootAttachment = null;
   if (attachment?.kind === "image") {
@@ -169,7 +153,7 @@ async function handle(api, event, prompt, registerReply) {
     if (imgData) {
       userMsg = {
         role: "user",
-        content: `[${senderName}]: ${prompt.trim() || "وصف هذه الصورة"}`,
+        content: userContent,
       };
       rootAttachment = {
         kind:        "image",
@@ -177,13 +161,13 @@ async function handle(api, event, prompt, registerReply) {
         contentType: imgData.contentType,
       };
     } else {
-      userMsg = { role: "user", content: `[${senderName}]: ${prompt.trim() || "وصف هذه الصورة"}` };
+      userMsg = { role: "user", content: userContent };
       await updateStatus("⚠️ تعذّر تحميل الصورة، سأجيب على النص فقط...");
     }
   } else if (attachment) {
     userMsg = {
       role: "user",
-      content: `[${senderName}]: ${displayPrompt}`,
+      content: userContent,
     };
     rootAttachment = { kind: attachment.kind, url: attachment.url };
   } else {
@@ -192,7 +176,7 @@ async function handle(api, event, prompt, registerReply) {
   const messages = [...ctx, userMsg];
   let result;
   try {
-    result = await callHF(messages, rootAttachment, prompt.trim(), wantsVoice);
+    result = await callHF(messages, rootAttachment, userContent, wantsVoice);
   } catch (e) {
     console.error("[GROQ→HF]", e.response?.status, e.message?.substring(0, 80));
     console.error("[groq:callHF]", e.message);
@@ -219,14 +203,13 @@ async function handle(api, event, prompt, registerReply) {
     );
   }
   if (followUpMsgId && registerReply) {
-    // Restrict follow-up to the original sender only (F-03 fix).
     registerReply(followUpMsgId, {}, async ({ api, event }) => {
       await handle(api, event, event.body?.trim() || "", registerReply);
-    }, senderID);
+    });
   }
   await saveCtx(sessionKey, [
     ...ctx,
-    { role: "user",      content: userContent },
+    { role: "user", username: senderName, content: userContent },
     { role: "assistant", content: reply },
   ]);
 }
@@ -239,11 +222,12 @@ export default {
     countDown: 3,
     role: 0,
     category: "ذكاء اصطناعي",
-    description: "محادثة ذكية جماعية مع دعم التوجيه المتعدد للنماذج عبر Groq",
+    description: "محادثة Groq جماعية بذاكرة threadID مشتركة؛ أي عضو يستطيع المتابعة ويُميّز كل دور باسمه، مع دعم الوسائط والصوت",
     usage: [
       "{pn}Ai4 <سؤالك> — يرد البوت برسالة صوتية 🔊",
       "{pn}Ai4 + صورة/صوت/فيديو مرفق — تحليل الوسائط والرد بصوت",
       "{pn}Ai4 مسح — مسح ذاكرة المحادثة الجماعية",
+      "يمكن لأي عضو الرد على إجابة البوت لمواصلة نقاش المجموعة",
     ],
   },
   onStart: async ({ api, event, args, message }) => {

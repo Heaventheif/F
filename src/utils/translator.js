@@ -1,5 +1,6 @@
 "use strict";
 import * as cache from "./cache.js";
+import { translateWithFahim } from "./fahimProviders.js";
 let _googleXTranslate = null;
 let _bingTranslate = null;
 (async () => {
@@ -67,9 +68,16 @@ const providers = [
       const res = await withTimeout(bingTranslate(text, null, targetLang), TIMEOUT_MS, "Bing");
       return res?.translation ? String(res.translation).trim() : null;
     }
+  },
+  {
+    name: "Fahim",
+    blockedUntil: 0,
+    cooldownMs: 10 * 60 * 1000,
+    maxLen: MAX_TEXT_LEN,
+    run: async (text, targetLang) => translateWithFahim(text, targetLang)
   }
 ];
-async function translateText(text, targetLang) {
+async function translateText(text, targetLang, fallbackToOriginal = true) {
   if (!text?.trim()) return text;
   const key = `tr_${targetLang}:${text}`;
   const cached = cache.get(key);
@@ -94,7 +102,10 @@ async function translateText(text, targetLang) {
       }
     }
   }
-  return text;
+  return fallbackToOriginal ? text : null;
+}
+async function translateTextStrict(text, targetLang) {
+  return translateText(text, targetLang, false);
 }
 async function translateToArabic(text) {
   if (!text?.trim()) return text;
@@ -111,7 +122,7 @@ async function translateToEnglish(text) {
   }
   return translateText(text, "en");
 }
-export { translateToArabic, translateToEnglish };
+export { translateTextStrict, translateToArabic, translateToEnglish };
 
 // ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */

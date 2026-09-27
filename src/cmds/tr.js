@@ -1,11 +1,11 @@
-import http from "../utils/fetchHttp.js";
+import { translateTextStrict } from "../utils/translator.js";
 export default {
   config: {
     name: "tr",
     description: "ترجمة النص إلى أي لغة",
     usage: [
-      "{pn}ترجمة1 <رمز_اللغة> <النص> — مثال: {pn}ترجمة1 en مرحبا",
-      "رد على رسالة + {pn}ترجمة1 <رمز_اللغة> — ترجمة نص الرسالة المردود عليها",
+      "{pn}tr <رمز_اللغة> <النص> — مثال: {pn}tr en مرحبا",
+      "رد على رسالة + {pn}tr <رمز_اللغة> — ترجمة نص الرسالة المردود عليها",
     ],
     aliases: ["ترجم"],
     category: "أدوات عامة",
@@ -32,7 +32,7 @@ export default {
         targetLang = "ar";
         textToTranslate = messageReply.body;
       } else {
-        return global.safeSend(api, "❌ الرجاء كتابة النص أو الرد على رسالة لترجمتها\nأو: ترجمة1 <رمز_اللغة> <النص>", threadID, null, messageID);
+        return global.safeSend(api, "الرجاء كتابة النص أو الرد على رسالة لترجمتها.\nالاستخدام: tr <رمز_اللغة> <النص>", threadID, null, messageID);
       }
     } else if (knownLangCodes.includes(args[0].toLowerCase()) && (args.length > 1 || (messageReply && messageReply.body))) {
       targetLang = args[0].toLowerCase();
@@ -45,25 +45,15 @@ export default {
       targetLang = "ar";
       textToTranslate = args.join(" ");
     }
+    if (textToTranslate.length > 5000) {
+      return global.safeSend(api, "النص طويل جداً؛ الحد الأقصى 5000 حرف.", threadID, null, messageID);
+    }
     try {
-      const response = await http.get(
-        `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(textToTranslate)}`,
-        { timeout: 15000, headers: { "User-Agent": "Mozilla/5.0" } }
-      );
-      const result = response.data;
-      if (!Array.isArray(result) || !Array.isArray(result[0])) {
-        throw new Error("استجابة غير متوقعة من خدمة الترجمة، حاول لاحقاً.");
-      }
-      let translatedText = "";
-      result[0].forEach(item => {
-        if (item?.[0]) translatedText += item[0];
-      });
-      if (!translatedText) throw new Error("لم تُرجع الترجمة أي نص.");
-      await global.safeSend(api, translatedText, threadID, null, messageID);
+      const translatedText = await translateTextStrict(textToTranslate, targetLang);
+      if (!translatedText?.trim()) throw new Error("تعذر الوصول إلى مزودي الترجمة.");
+      await global.safeSend(api, translatedText.trim(), threadID, null, messageID);
     } catch (error) {
-      const msg = error.code === "ECONNABORTED" || error.message?.includes("timeout")
-        ? "⏱️ انتهت مهلة الاتصال بخدمة الترجمة"
-        : `❌ خطأ في الترجمة: ${error.message}`;
+      const msg = "تعذرت الترجمة الآن؛ يرجى المحاولة مرة أخرى لاحقاً.";
       await global.safeSend(api, msg, threadID, null, messageID);
     }
   }

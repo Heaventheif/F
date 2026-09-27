@@ -1,18 +1,9 @@
 import http from "../utils/fetchHttp.js";
 import { getHfBase, getInternalToken } from "../utils/hfClient.js";
 import { loadCtx, saveCtx, clearCtx } from "../utils/sharedSession.js";
+import { formatGroupTurn, formatThreadHistory, resolveGroupUsername } from "../utils/groupConversation.js";
 const COLLECTION = "gemini_sessions";
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "heic", "bmp"];
-function sanitizeName(name) {
-  if (!name) return "مستخدم";
-  const clean = String(name)
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .replace(/[[\]{}<>`]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 40);
-  return clean || "مستخدم";
-}
 // اكتشف مرفق صورة في الرسالة أو الرسالة المُرد عليها.
 function detectImageAttachment(event) {
   const sources = [
@@ -73,37 +64,42 @@ function formatSources(sources) {
   return `\n\n📎 المصادر:\n${list}`;
 }
 async function handleVision(api, event, prompt, registerReply) {
-  const { threadID, messageID, senderID } = event;
+  const { threadID, messageID } = event;
   const att = detectImageAttachment(event);
   if (!att) {
     // لا توجد صورة — تابع كمحادثة عادية
     return handle(api, event, prompt, registerReply);
   }
-  let senderDisplayName = senderID;
-  try {
-    const userInfo = await new Promise((res, rej) =>
-      api.getUserInfo(senderID, (err, d) => err ? rej(err) : res(d))
-    );
-    senderDisplayName = userInfo?.[senderID]?.name || senderID;
-  } catch (_) {}
-  senderDisplayName = sanitizeName(senderDisplayName);
+  const senderDisplayName = await resolveGroupUsername(api, event);
   const question = prompt.trim() || "صف هذه الصورة بالتفصيل";
+  const ctx = await loadCtx(COLLECTION, threadID);
+  const userContent = formatGroupTurn(senderDisplayName, `[مرفق صورة] ${question}`);
+  const priorContext = formatThreadHistory(ctx);
+  const visionPrompt = [
+    "أجب بالعربية، وميّز بين أعضاء المجموعة بأسمائهم.",
+    priorContext ? `سياق المجموعة السابق:\n${priorContext}` : "",
+    userContent,
+  ].filter(Boolean).join("\n\n");
   let result;
   try {
-    result = await callVision(att.url, att.ext, `[${senderDisplayName}]: ${question}`);
+    result = await callVision(att.url, att.ext, visionPrompt);
   } catch (e) {
     console.error("[VISION→HF]", e.response?.status, e.message?.substring(0, 100));
     return global.safeSend(api, `❌ فشل تحليل الصورة: ${e.message}`, threadID, null, messageID);
   }
   const sources = formatSources(result.sources);
   const fullReply = `🖼️ ${result.reply}${sources}`;
+  await saveCtx(COLLECTION, threadID, [
+    ...ctx,
+    { role: "user", username: senderDisplayName, content: userContent },
+    { role: "assistant", content: result.reply },
+  ]);
   global.safeSend(api, fullReply, threadID, (err, info) => {
     if (err || !info || !registerReply) return;
-    // يمكن متابعة النقاش عن الصورة بعد الرد
-    // Restrict follow-up to the original sender only (F-03 fix).
+    // أي عضو في المجموعة يستطيع متابعة سياق الصورة.
     registerReply(info.messageID, {}, async ({ api, event }) => {
       await handle(api, event, event.body?.trim() || "", registerReply);
-    }, senderID);
+    });
   }, messageID);
 }
 async function handleSearch(api, event, query) {
@@ -125,7 +121,7 @@ async function handleSearch(api, event, query) {
   return global.safeSend(api, `🔍 ${result.reply}${sources}`, threadID, null, messageID);
 }
 async function handle(api, event, prompt, registerReply) {
-  const { threadID, messageID, senderID } = event;
+  const { threadID, messageID } = event;
   const sessionKey = threadID;
   if (["clear", "مسح", "reset"].includes(prompt.trim().toLowerCase())) {
     await clearCtx(COLLECTION, sessionKey);
@@ -134,24 +130,18 @@ async function handle(api, event, prompt, registerReply) {
   if (!prompt.trim()) {
     return global.safeSend(api,
       "🤖 Gemini AI\n\n" +
-      ".gemini <سؤال> — محادثة بذاكرة\n" +
-      ".gemini مسح — مسح الذاكرة\n" +
+      ".gemini <سؤال> — محادثة بذاكرة جماعية\n" +
+      ".gemini مسح — مسح ذاكرة المجموعة\n" +
       "📷 أرسل صورة مع سؤالك — يحللها تلقائياً\n" +
       "🔍 .search <سؤال> — بحث فوري بالإنترنت",
       threadID, null, messageID
     );
   }
-  let senderDisplayName = senderID;
-  try {
-    const userInfo = await new Promise((res, rej) =>
-      api.getUserInfo(senderID, (err, d) => err ? rej(err) : res(d))
-    );
-    senderDisplayName = userInfo?.[senderID]?.name || senderID;
-  } catch (_) {}
-  senderDisplayName = sanitizeName(senderDisplayName);
+  const senderDisplayName = await resolveGroupUsername(api, event);
   const ctx = await loadCtx(COLLECTION, sessionKey);
-  const userContent = `[${senderDisplayName}]: ${prompt.trim()}`;
-  const messages = [...ctx, { role: "user", content: userContent }];
+  const userContent = formatGroupTurn(senderDisplayName, prompt.trim());
+  const messages = [...ctx, { role: "user", content: userContent }]
+    .map(({ role, content }) => ({ role, content }));
   let result;
   try {
     result = await callHF(messages);
@@ -167,14 +157,13 @@ async function handle(api, event, prompt, registerReply) {
   const fullReply = reply + sources;
   global.safeSend(api, fullReply, threadID, (err, info) => {
     if (err || !info || !registerReply) return;
-    // Restrict follow-up to the original sender only (F-03 fix).
     registerReply(info.messageID, {}, async ({ api, event }) => {
       await handle(api, event, event.body?.trim() || "", registerReply);
-    }, senderID);
+    });
   }, messageID);
   await saveCtx(COLLECTION, sessionKey, [
     ...ctx,
-    { role: "user",      content: userContent },
+    { role: "user", username: senderDisplayName, content: userContent },
     { role: "assistant", content: reply },
   ]);
 }
@@ -187,9 +176,10 @@ export default {
     countDown: 5,
     role: 0,
     category: "ذكاء اصطناعي",
-    description: "دردشة ذكية + تحليل صور + بحث فعلي بالإنترنت — Gemini  ",
+    description: "دردشة Gemini جماعية بذاكرة مشتركة حسب threadID؛ كل عضو يستطيع المتابعة مع تمييزه باسمه، مع تحليل الصور والبحث",
     usage: [
       "{pn}gemini <سؤال> — محادثة بذاكرة جماعية",
+      "أي عضو يستطيع الرد على إجابة البوت لمواصلة الحوار المشترك",
       "{pn}gemini مسح — مسح ذاكرة المحادثة",
       "{pn}gemini (+ صورة) — تحليل الصورة والإجابة",
       "{pn}gemini <سؤال> (+ صورة) — سؤال محدد عن الصورة",

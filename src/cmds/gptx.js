@@ -1,11 +1,13 @@
 "use strict";
 import http from "../utils/fetchHttp.js";
 import { loadCtx, saveCtx, clearCtx } from "../utils/sharedSession.js";
+import { buildGroupPrompt, resolveGroupUsername } from "../utils/groupConversation.js";
 const COLLECTION        = "gptx_sessions";
 const COLLECTION_ACTIVE = "gptx_active";
 const BASE_CEDDS    = "https://ceddsrestapi.vercel.app";
 const BASE_TOSHIRO  = "https://toshiro-api-editz6t9.vercel.app";
 const BASE_BETADASH = "https://betadash-api-swordslush-production.up.railway.app";
+const BASE_FAHIM    = "https://smfahim.xyz";
 const MAX_HISTORY   = 6;
 const TIMEOUT_MS    = 45000;
 const SYSTEM_TRIGGERS = ["gptx ", "gptx", "ai ", "ذكاء "];
@@ -33,6 +35,8 @@ const TEXT_ENDPOINTS = [
   // Betadash
   { name: "betadash-goody",    base: BASE_BETADASH, path: "/goody",                method: "GET", queryKey: "ask",      replyKey: "response" },
   { name: "betadash-opera",    base: BASE_BETADASH, path: "/opera",                method: "GET", queryKey: "ask",      replyKey: "message"  },
+  // Fahim Gemini V3 — آخر مزود احتياطي، تم التحقق من شكل الرد العربي.
+  { name: "fahim-gemini-v3",   base: BASE_FAHIM,    path: "/ai/gemini/v3",         method: "GET", queryKey: "prompt",  replyKey: "result", timeoutMs: 12000 },
 ];
 
 // ── Image-analysis endpoints (تحليل صورة مرسلة) ────────────────────────────
@@ -155,7 +159,7 @@ function deepGet(obj, dotKey) {
 async function callEndpoint(endpoint, msg, imgUrl = null) {
   const url    = `${endpoint.base}${endpoint.path}`;
   const method = (endpoint.method || "POST").toUpperCase();
-  const opts   = { timeout: TIMEOUT_MS, headers: { "User-Agent": "Mozilla/5.0" } };
+  const opts   = { timeout: endpoint.timeoutMs || TIMEOUT_MS, headers: { "User-Agent": "Mozilla/5.0" } };
   let data;
   if (method === "GET") {
     const params = new URLSearchParams({ [endpoint.queryKey]: msg });
@@ -254,11 +258,8 @@ function detectImageUrl(event) {
   }
   return null;
 }
-function buildPromptWithHistory(_history, newPrompt) {
-  return newPrompt;
-}
 async function handleMessage(api, event, message, prompt, registerReply) {
-  const { threadID, messageID, senderID } = event;
+  const { threadID, messageID } = event;
   const lowerPrompt = prompt.trim().toLowerCase();
   const setMatch = lowerPrompt.match(/^set\s+(.+)$/);
   if (setMatch) {
@@ -340,19 +341,19 @@ async function handleMessage(api, event, message, prompt, registerReply) {
   const imageUrl = detectImageUrl(event);
   if (!prompt && !imageUrl) return message.reply("⚠️ اكتب سؤالاً أو ردّ على صورة.");
   const history = await loadHistory(threadID);
+  const senderName = await resolveGroupUsername(api, event);
   const imageOnlyPrompt = `شوف هذه الصورة وعلق عليها بجملة واحدة قصيرة بالدارجة الجزائرية كيما تعلق على صورة صاحبك، بلا إيموجي.`;
+  const groupPrompt = buildGroupPrompt(history, senderName, prompt || "[مرفق صورة]");
   const finalPrompt = prompt
-    ? buildPromptWithHistory(history, prompt)
-    : imageOnlyPrompt;
+    ? `أجب باللغة العربية الفصحى افتراضياً، إلا إذا طلبتُ صراحةً لغة أخرى.\n${groupPrompt}`
+    : `${imageOnlyPrompt}\n${groupPrompt}`;
   const orderedTextEp = getOrderedEndpoints(threadID);
   let reply;
   try {
     if (imageUrl) {
       const dataUrl     = await fetchImageAsDataUrl(imageUrl);
       const effectiveUrl = dataUrl ?? imageUrl; 
-      const imgFallbackMsg = prompt
-        ? `${finalPrompt}\n[رابط الصورة: ${effectiveUrl}]`
-        : `${imageOnlyPrompt}\n[رابط الصورة: ${effectiveUrl}]`;
+      const imgFallbackMsg = `${finalPrompt}\n[رابط الصورة: ${effectiveUrl}]`;
       try {
         reply = await callWithFallback(IMAGE_ENDPOINTS, finalPrompt, effectiveUrl);
       } catch (_imgErr) {
@@ -368,7 +369,7 @@ async function handleMessage(api, event, message, prompt, registerReply) {
   reply = cleanReply(reply);
   const updatedHistory = [
     ...history,
-    { role: "user",      content: prompt || "[صورة]" },
+    { role: "user", username: senderName, content: prompt || "[مرفق صورة]" },
     { role: "assistant", content: reply  },
   ].slice(-(MAX_HISTORY * 2));
   await saveHistory(threadID, updatedHistory);
@@ -391,7 +392,7 @@ export default {
     role: 0,
     usePrefix: false,
     category: "ذكاء اصطناعي",
-    description: "ذكاء اصطناعي بذاكرة جماعية، ردود تلقائية، تحليل صور، توليد صور، وكشف AI — مدعوم بـ CEDDS + Toshiro + Betadash",
+    description: "محادثة AI مشتركة حسب threadID؛ يستطيع كل عضو المتابعة ويُميّز الحوار أسماء المشاركين — تحليل صور وتوليدها، والإجابة بالعربية افتراضياً",
     usage: [
       "{pn}gptx <سؤالك> — بدء محادثة",
       "{pn}gptx on/off — تفعيل/إيقاف الرد التلقائي",
@@ -400,6 +401,7 @@ export default {
       "{pn}gptx img <وصف> — توليد صورة بالذكاء الاصطناعي",
       "{pn}gptx detect <نص> — كشف هل النص من AI أم لا",
       "رد على صورة + gptx — تحليل الصورة",
+      "يمكن لأي عضو الرد على إجابة البوت لمواصلة نقاش المجموعة",
       "{pn}gptx مسح — مسح ذاكرة المحادثة",
     ],
   },
