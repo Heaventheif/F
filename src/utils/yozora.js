@@ -23,14 +23,14 @@ export function buildYozoraUrl(pathname, params = {}) {
   return url.toString();
 }
 
-export async function getYozoraInfo(query, format = YOZORA_DEFAULT_FORMAT) {
+export async function getYozoraInfo(query, format = YOZORA_DEFAULT_FORMAT, timeout = 90_000) {
   const source = asText(query);
   if (!source) throw new Error("رابط أو عبارة البحث فارغة");
   const response = await http.get(buildYozoraUrl("/api/info", {
     query: source,
     format,
   }), {
-    timeout: 90_000,
+    timeout,
     responseType: "json",
     validateStatus: () => true,
     headers: { Accept: "application/json", "User-Agent": "SunkenBot/3.0" },

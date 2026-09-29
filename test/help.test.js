@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildPages, getLiveCommands, toEntry } from "../src/cmds/help.js";
+import factCommand from "../src/cmds/fact.js";
+
+test("fact command belongs to the games and entertainment category", () => {
+  assert.equal(factCommand.config.category, "ألعاب وترفيه");
+  assert.match(buildPages([toEntry(factCommand)])[0], /ألعاب وترفيه\n  fact/);
+});
 
 test("help pages are compact, emoji-free, and use aligned category/name rows", () => {
   const entries = [

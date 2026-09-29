@@ -1,13 +1,19 @@
 import http from "../utils/fetchHttp.js";
 import fs from "fs";
-import path from "path";
-import os from "os";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
+import { downloadToTemp } from "../utils/mediaStream.js";
+import { buildYozoraDownloadUrl, getYozoraEntries, getYozoraInfo } from "../utils/yozora.js";
 const TUMBLR_API_KEY = process.env.TUMBLR_API_KEY || "";
+const TIKTOK_INFO_TIMEOUT_MS = 35_000;
+const TIKTOK_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
+// Set TIKTOK_RANDOM_USERS to comma-separated public handles; NASA is the tested fallback.
+const DEFAULT_TIKTOK_USERS = ["nasa"];
+const TIKTOK_USERS = parseTikTokUsers(process.env.TIKTOK_RANDOM_USERS);
 const _RECENTLY_SENT_KEY = "random_recentlySent";
 const _recentlySent = new Set();
 const _RECENT_LIMIT = 200;
 let _hydrated = false;
+const _tiktokProfileCache = new Map();
 function hydrateRecentlySent() {
   if (_hydrated) return;
   _hydrated = true;
@@ -22,6 +28,42 @@ function rememberSent(key) {
   }
   global.globalData?.set?.(_RECENTLY_SENT_KEY, [..._recentlySent]);
 }
+export function parseTikTokUsers(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [...DEFAULT_TIKTOK_USERS];
+  const users = [...new Set(raw.split(",")
+    .map(user => user.trim().replace(/^@/, ""))
+    .filter(user => /^[\w.-]{2,32}$/.test(user)))];
+  return users.length ? users : [...DEFAULT_TIKTOK_USERS];
+}
+
+export function isTikTokVideoUrl(value) {
+  try {
+    const url = new URL(value);
+    return /(^|\.)tiktok\.com$/i.test(url.hostname) && /\/video\/\d+/.test(url.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+export function chooseRandomUnseen(items, keyOf, seen = new Set()) {
+  const valid = (Array.isArray(items) ? items : [])
+    .filter(item => item && String(keyOf(item) || "").trim());
+  if (!valid.length) return null;
+  const fresh = valid.filter(item => !seen.has(String(keyOf(item))));
+  const pool = fresh.length ? fresh : valid;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function shuffled(items) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index--) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swap]] = [result[swap], result[index]];
+  }
+  return result;
+}
+
 const VIDEO_BLOGS = [
   "videohall", "gifak-net", "sizvideos", "pleatedjeans",
   "tastefullyoffensive", "humortrain", "best-of-tumblr-daily",
@@ -29,10 +71,61 @@ const VIDEO_BLOGS = [
   "catasters", "kittens", "there-is-always-hope",
   "awesome-picz", "thefrogman",
 ];
+
+async function getTikTokVideos(username) {
+  const cached = _tiktokProfileCache.get(username);
+  if (cached && Date.now() - cached.fetchedAt < TIKTOK_PROFILE_CACHE_TTL_MS) {
+    return cached.videos;
+  }
+  try {
+    const profileUrl = `https://www.tiktok.com/@${encodeURIComponent(username)}`;
+    const info = await getYozoraInfo(profileUrl, undefined, TIKTOK_INFO_TIMEOUT_MS);
+    const videos = [...new Map(
+      getYozoraEntries(info, 60)
+        .filter(entry => isTikTokVideoUrl(entry.url))
+        .map(entry => [entry.url, { id: entry.id, url: entry.url }]),
+    ).values()];
+    if (!videos.length) throw new Error("لم تُعثر على فيديوهات عامة في الحساب");
+    _tiktokProfileCache.set(username, { fetchedAt: Date.now(), videos });
+    return videos;
+  } catch (error) {
+    if (cached?.videos.length) return cached.videos;
+    throw error;
+  }
+}
+
+async function tryTikTok() {
+  let repeatPool = [];
+  for (const username of shuffled(TIKTOK_USERS).slice(0, 2)) {
+    try {
+      const videos = await getTikTokVideos(username);
+      const fresh = videos.filter(video => !_recentlySent.has(`tiktok:${video.url}`));
+      const pool = fresh.length ? fresh : (!repeatPool.length ? videos : []);
+      if (fresh.length) {
+        const selected = chooseRandomUnseen(pool, video => video.url, new Set());
+        return {
+          source: "tiktok",
+          videoUrl: buildYozoraDownloadUrl(selected.url),
+          sentKey: `tiktok:${selected.url}`,
+        };
+      }
+      if (pool.length) repeatPool = pool;
+    } catch (error) {
+      console.warn(`[RANDOM] TikTok @${username} unavailable: ${error.message}`);
+    }
+  }
+  if (!repeatPool.length) return null;
+  const selected = chooseRandomUnseen(repeatPool, video => video.url, new Set());
+  return {
+    source: "tiktok",
+    videoUrl: buildYozoraDownloadUrl(selected.url),
+    sentKey: `tiktok:${selected.url}`,
+  };
+}
+
 async function tryTumblr() {
   if (!TUMBLR_API_KEY) return null;
-  const shuffled = [...VIDEO_BLOGS].sort(() => Math.random() - 0.5);
-  for (const blog of shuffled) {
+  for (const blog of shuffled(VIDEO_BLOGS)) {
     try {
       const countResp = await http.get(
         `https://api.tumblr.com/v2/blog/${blog}/posts/video`,
@@ -47,9 +140,8 @@ async function tryTumblr() {
       );
       const posts = response.data?.response?.posts || [];
       if (!posts.length) continue;
-      const fresh = posts.filter(p => !_recentlySent.has(p.post_url));
-      const pool  = fresh.length ? fresh : posts;
-      const post  = pool[Math.floor(Math.random() * pool.length)];
+      const post = chooseRandomUnseen(posts, item => item.post_url || item.id_string || item.video_url, _recentlySent);
+      if (!post) continue;
       const url = post.video_url
         || post.player?.find(p => p.width >= 400)?.embed_code
         || post.player?.[0]?.embed_code;
@@ -57,55 +149,46 @@ async function tryTumblr() {
       return {
         source: "tumblr",
         videoUrl: url,
-        sentKey: post.post_url || "",
+        sentKey: post.post_url || post.id_string || post.video_url || "",
       };
     } catch (_) { continue; }
   }
   return null;
 }
+
+async function pickRandomVideo() {
+  for (const provider of shuffled([tryTikTok, tryTumblr])) {
+    const picked = await provider();
+    if (picked) return picked;
+  }
+  return null;
+}
+
 export default {
   config: {
     name: "random",
     aliases: ["فيديو"],
-    version: "1.5.0",
+    version: "1.6.0",
     countDown: 15,
     role: 0,
     category: "وسائط وتحميل",
-    description: "فيديو عشوائي من Tumblr — قائمة التكرار محفوظة في MongoDB",
-    usage: [
-      "{pn}فيديو — فيديو عشوائي من Tumblr",
-    ],
+    description: "فيديو عشوائي من Tumblr أو TikTok",
+    usage: ["{pn}فيديو — فيديو عشوائي من Tumblr أو TikTok"],
   },
-  onStart: async function ({ api, event, args }) {
+  onStart: async function ({ api, event }) {
     const { threadID, messageID } = event;
     hydrateRecentlySent();
-    if (!TUMBLR_API_KEY) {
-      return global.safeSend(api, "⚠️ لا يوجد أي مصدر مضبوط (TUMBLR_API_KEY)", threadID, null, messageID);
-    }
-    const tmpFile = path.join(os.tmpdir(), `random_${Date.now()}.mp4`);
+    let tmpFile = null;
     let partPaths = [];
     try {
-      const picked = await tryTumblr();
+      const picked = await pickRandomVideo();
       if (!picked) {
-        return global.safeSend(api, "❌ لم أجد فيديو الآن — حاول مرة أخرى", threadID, null, messageID);
+        return global.safeSend(api, "لم أجد فيديو الآن. حاول مرة أخرى لاحقاً.", threadID, null, messageID);
       }
       const { videoUrl, sentKey } = picked;
-      const dlResponse = await http.get(videoUrl, {
-        responseType: "stream", timeout: 60000,
-        headers: { "User-Agent": "Mozilla/5.0" },
-        validateStatus: () => true,
-      });
-      if (dlResponse.status !== 200) {
-        rememberSent(sentKey);
-        return global.safeSend(api, "تعذّر تنزيل الفيديو.", threadID, null, messageID);
-      }
-      await new Promise((resolve, reject) => {
-        const writer = fs.createWriteStream(tmpFile);
-        dlResponse.data.pipe(writer);
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
-      const size = fs.statSync(tmpFile).size;
+      const downloaded = await downloadToTemp(videoUrl, "mp4");
+      tmpFile = downloaded.tmpPath;
+      const size = downloaded.size;
       if (size < 10240) return global.safeSend(api, "الفيديو فارغ.", threadID, null, messageID);
       const files = NEEDS_SPLIT(size)
         ? (partPaths = await splitFile(tmpFile, "mp4"))
@@ -120,14 +203,14 @@ export default {
       }
       rememberSent(sentKey);
     } catch (error) {
-      let errMsg = "❌ فشل جلب الفيديو\n";
-      if (error.response?.status === 401)     errMsg += "🔑 API Key غير صالح";
-      else if (error.response?.status === 429) errMsg += "⚠️ تجاوزت حد الطلبات";
-      else if (error.code === "ECONNABORTED")  errMsg += "⏱ انتهت مهلة الانتظار";
-      else errMsg += error.message?.substring(0, 150) || "خطأ غير معروف";
+      let errMsg = "فشل جلب الفيديو. ";
+      if (error.response?.status === 401) errMsg += "رفض المصدر الطلب.";
+      else if (error.response?.status === 429) errMsg += "تجاوز المصدر حد الطلبات.";
+      else if (error.code === "ECONNABORTED") errMsg += "انتهت مهلة الانتظار.";
+      else errMsg += error.message?.substring(0, 150) || "خطأ غير معروف.";
       global.safeSend(api, errMsg, threadID, null, messageID);
     } finally {
-      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+      try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
       if (partPaths.length) await cleanupParts(partPaths);
     }
   }

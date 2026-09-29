@@ -8,7 +8,7 @@ export default {
     version: "1.0.0",
     role: 0,
     countDown: 5,
-    category: "ثقافة وترفيه",
+    category: "ألعاب وترفيه",
     description: "يعرض معلومة عامة عشوائية باللغة العربية",
     usage: ["{pn}fact — معلومة عشوائية", "{pn}معلومة — نفس الأمر بالعربية"],
   },
