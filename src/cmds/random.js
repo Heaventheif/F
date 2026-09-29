@@ -4,16 +4,18 @@ import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js"
 import { downloadToTemp } from "../utils/mediaStream.js";
 import { buildYozoraDownloadUrl, getYozoraEntries, getYozoraInfo } from "../utils/yozora.js";
 const TUMBLR_API_KEY = process.env.TUMBLR_API_KEY || "";
-const TIKTOK_INFO_TIMEOUT_MS = 35_000;
+const TIKTOK_INFO_TIMEOUT_MS = 15_000;
 const TIKTOK_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
-// Set TIKTOK_RANDOM_USERS to comma-separated public handles; NASA is the tested fallback.
-const DEFAULT_TIKTOK_USERS = ["nasa"];
+const TIKTOK_PROFILE_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
+// Defaults span meme and animal accounts; add public edit/music handles via TIKTOK_RANDOM_USERS.
+const DEFAULT_TIKTOK_USERS = ["meme", "corgibobaa"];
 const TIKTOK_USERS = parseTikTokUsers(process.env.TIKTOK_RANDOM_USERS);
 const _RECENTLY_SENT_KEY = "random_recentlySent";
 const _recentlySent = new Set();
 const _RECENT_LIMIT = 200;
 let _hydrated = false;
 const _tiktokProfileCache = new Map();
+const _tiktokProfileCooldown = new Map();
 function hydrateRecentlySent() {
   if (_hydrated) return;
   _hydrated = true;
@@ -77,6 +79,11 @@ async function getTikTokVideos(username) {
   if (cached && Date.now() - cached.fetchedAt < TIKTOK_PROFILE_CACHE_TTL_MS) {
     return cached.videos;
   }
+  const retryAfter = _tiktokProfileCooldown.get(username) || 0;
+  if (retryAfter > Date.now()) {
+    if (cached?.videos.length) return cached.videos;
+    throw new Error("مصدر TikTok في مهلة تهدئة مؤقتة");
+  }
   try {
     const profileUrl = `https://www.tiktok.com/@${encodeURIComponent(username)}`;
     const info = await getYozoraInfo(profileUrl, undefined, TIKTOK_INFO_TIMEOUT_MS);
@@ -87,8 +94,10 @@ async function getTikTokVideos(username) {
     ).values()];
     if (!videos.length) throw new Error("لم تُعثر على فيديوهات عامة في الحساب");
     _tiktokProfileCache.set(username, { fetchedAt: Date.now(), videos });
+    _tiktokProfileCooldown.delete(username);
     return videos;
   } catch (error) {
+    _tiktokProfileCooldown.set(username, Date.now() + TIKTOK_PROFILE_FAILURE_COOLDOWN_MS);
     if (cached?.videos.length) return cached.videos;
     throw error;
   }
@@ -96,24 +105,30 @@ async function getTikTokVideos(username) {
 
 async function tryTikTok() {
   let repeatPool = [];
-  for (const username of shuffled(TIKTOK_USERS).slice(0, 2)) {
+  const usernames = shuffled(TIKTOK_USERS).slice(0, 3);
+  const attempts = usernames.map(async username => {
     try {
       const videos = await getTikTokVideos(username);
       const fresh = videos.filter(video => !_recentlySent.has(`tiktok:${video.url}`));
-      const pool = fresh.length ? fresh : (!repeatPool.length ? videos : []);
       if (fresh.length) {
-        const selected = chooseRandomUnseen(pool, video => video.url, new Set());
+        const selected = chooseRandomUnseen(fresh, video => video.url, new Set());
         return {
           source: "tiktok",
           videoUrl: buildYozoraDownloadUrl(selected.url),
           sentKey: `tiktok:${selected.url}`,
         };
       }
-      if (pool.length) repeatPool = pool;
+      repeatPool.push(...videos);
     } catch (error) {
       console.warn(`[RANDOM] TikTok @${username} unavailable: ${error.message}`);
     }
-  }
+    return null;
+  });
+  const picked = await Promise.any(attempts.map(attempt => attempt.then(result => {
+    if (result) return result;
+    throw new Error("لا توجد فيديوهات جديدة");
+  }))).catch(() => null);
+  if (picked) return picked;
   if (!repeatPool.length) return null;
   const selected = chooseRandomUnseen(repeatPool, video => video.url, new Set());
   return {

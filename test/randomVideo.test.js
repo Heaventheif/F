@@ -7,9 +7,10 @@ import {
 } from "../src/cmds/random.js";
 
 test("TikTok random sources accept comma-separated public usernames", () => {
-  assert.deepEqual(parseTikTokUsers("@nasa, duolingo, invalid handle, @nasa"), ["nasa", "duolingo"]);
-  assert.deepEqual(parseTikTokUsers(""), ["nasa"]);
-  assert.deepEqual(parseTikTokUsers("invalid handle"), ["nasa"]);
+  assert.deepEqual(parseTikTokUsers("@meme, duolingo, invalid handle, @meme"), ["meme", "duolingo"]);
+  assert.deepEqual(parseTikTokUsers(""), ["meme", "corgibobaa"]);
+  assert.deepEqual(parseTikTokUsers("invalid handle"), ["meme", "corgibobaa"]);
+  assert.deepEqual(parseTikTokUsers("edit_account,music.edits"), ["edit_account", "music.edits"]);
 });
 
 test("only canonical TikTok video URLs are accepted from profile results", () => {
