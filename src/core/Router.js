@@ -1,5 +1,5 @@
 "use strict";
-import { buildMessageAPI, buildCommandContext } from "./Context.js";
+import { buildMessageAPI, buildCommandContext, getReplyTargetID } from "./Context.js";
 import { HANDLER_KEYS } from "./Loader.js";
 import { checkAuth } from "../middlewares/auth.js";
 import { checkAndSetCooldown } from "../middlewares/cooldown.js";
@@ -95,7 +95,8 @@ async function resolveGroupAdmin(api, event) {
 // تصدير الـ cache ليتمكن الأوامر من استخدامه مباشرةً بدل استدعاء getThreadInfo
 export { getThreadInfoCached };
 export const handleMessage = async (rawApi, event) => {
-  const { threadID, senderID, body, messageReply, messageID } = event;
+  const { threadID, senderID, body, messageReply } = event;
+  const replyTargetID = getReplyTargetID(event);
   const hasAttachment = (event.attachments?.length > 0);
   if (!body?.trim() && !hasAttachment) return;
   const api         = global.wrapApiForSafety(rawApi);
@@ -110,8 +111,11 @@ export const handleMessage = async (rawApi, event) => {
       const handler = replyData.onReply || replyData.callback ||
         (cmdForReply?.onReply ? (...a) => cmdForReply.onReply(...a) : null);
       if (typeof handler === "function") {
-        const replyMessage = buildMessageAPI(api, threadID, undefined);
-        Promise.resolve(handler({ api, event, message: replyMessage, Reply: replyData }))
+        const replyEvent = replyTargetID !== event.messageID
+          ? { ...event, commandMessageID: event.messageID, messageID: replyTargetID }
+          : event;
+        const replyMessage = buildMessageAPI(api, threadID, replyTargetID);
+        Promise.resolve(handler({ api, event: replyEvent, message: replyMessage, Reply: replyData }))
           .catch(e => console.error("[REPLY ERROR]", e.message));
       }
     }
@@ -150,7 +154,7 @@ export const handleMessage = async (rawApi, event) => {
   }
   if (!command) return;
   if (command.config?.enabled === false) {
-    api.sendMessage("⚠️ هذا الأمر معطّل مؤقتاً.", threadID, null, messageID);
+    api.sendMessage("⚠️ هذا الأمر معطّل مؤقتاً.", threadID, null, replyTargetID);
     return;
   }
   event.command = commandName;
@@ -159,7 +163,7 @@ export const handleMessage = async (rawApi, event) => {
   const authError = checkAuth(senderID, command, _botIndex, isGroupAdmin);
   if (authError) return;
   const cooldownError = checkAndSetCooldown(senderID, commandName, command);
-  if (cooldownError) { api.sendMessage(cooldownError, threadID, null, messageID); return; }
+  if (cooldownError) { api.sendMessage(cooldownError, threadID, null, replyTargetID); return; }
 
   // Record usage for the analytics dashboard (in-memory, resets on restart)
   global._cmdAnalytics = global._cmdAnalytics || {};
@@ -171,11 +175,11 @@ export const handleMessage = async (rawApi, event) => {
   const isGroup = !!event.isGroup;
   // فلترة: أوامر مقيّدة بالمجموعات أو الخاص فقط
   if (command.config?.groupOnly === true && !isGroup) {
-    api.sendMessage("⚠️ هذا الأمر يعمل داخل المجموعات فقط.", threadID, null, messageID);
+    api.sendMessage("⚠️ هذا الأمر يعمل داخل المجموعات فقط.", threadID, null, replyTargetID);
     return;
   }
   if (command.config?.dmOnly === true && isGroup) {
-    api.sendMessage("⚠️ هذا الأمر يعمل في الرسائل الخاصة فقط.", threadID, null, messageID);
+    api.sendMessage("⚠️ هذا الأمر يعمل في الرسائل الخاصة فقط.", threadID, null, replyTargetID);
     return;
   }
   const t0 = Date.now();
@@ -192,7 +196,7 @@ export const handleMessage = async (rawApi, event) => {
       timer.end("(فشل)");
       global.perfManager?.trackError();
       console.error(`[command:${commandName}]`, err.message);
-      api.sendMessage("⚠️ حدث خطأ أثناء تنفيذ الأمر — تم إبلاغ المطوّر تلقائياً.", threadID, null, messageID);
+      api.sendMessage("⚠️ حدث خطأ أثناء تنفيذ الأمر — تم إبلاغ المطوّر تلقائياً.", threadID, null, replyTargetID);
     }
   })().catch(err => console.error(`[ROUTER:IIFE:${commandName}]`, err.message));
 };

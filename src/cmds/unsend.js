@@ -13,6 +13,7 @@ export default {
   },
   onStart: async function ({ api, event, message }) {
     const { threadID, messageID, type, messageReply, senderID } = event;
+    const commandMessageID = event.commandMessageID ?? messageID;
     if (type !== "message_reply" || !messageReply) {
       return message.reply(
         "⚠️ **طريقة الاستخدام:**\n" +
@@ -31,7 +32,7 @@ export default {
     try {
       // Fix: FCA requires both messageID and threadID
       await api.unsendMessage(messageReply.messageID, threadID);
-      await api.unsendMessage(messageID, threadID).catch(() => {});
+      await api.unsendMessage(commandMessageID, threadID).catch(() => {});
       console.log(`[UNSEND] ✅ تم حذف رسالة في المجموعة ${threadID}`);
     } catch (error) {
       console.error("[UNSEND ERROR]:", {

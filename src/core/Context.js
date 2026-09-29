@@ -24,6 +24,10 @@ function buildMessageAPI(api, threadID, messageID) {
   };
 }
 
+function getReplyTargetID(event) {
+  return event?.messageReply?.messageID || event?.messageID;
+}
+
 // ─── Users Interface ────────────────────────────────────────────
 // واجهة موحَّدة لبيانات المستخدمين تعمل مع:
 //   • global.usersData  (Map في الذاكرة — دائماً موجودة)
@@ -138,11 +142,16 @@ function buildThreadsInterface() {
 
 // ─── Command Context ─────────────────────────────────────────────
 function buildCommandContext({ api, event, args = [], role = 0, prefix = "", isGroupAdmin = false }) {
-  const { threadID, messageID } = event;
-  const isGroup = !!event.isGroup;
+  const { threadID } = event;
+  const commandMessageID = event.messageID;
+  const messageID = getReplyTargetID(event);
+  const commandEvent = messageID !== commandMessageID
+    ? { ...event, commandMessageID, messageID }
+    : event;
+  const isGroup = !!commandEvent.isGroup;
   return {
     api,
-    event,
+    event: commandEvent,
     args,
     role,
     isGroup,
@@ -158,7 +167,7 @@ function buildCommandContext({ api, event, args = [], role = 0, prefix = "", isG
   };
 }
 
-export { buildMessageAPI, buildCommandContext };
+export { buildMessageAPI, buildCommandContext, getReplyTargetID };
 
 // ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */
