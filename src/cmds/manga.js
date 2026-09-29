@@ -6,7 +6,7 @@ import path from "path";
 import cache from "../utils/cache.js";
 import { downloadWithLimit } from "../utils/concurrentDownload.js";
 const API_BASE       = "https://api.mangadex.org";
-const MAX_PER_GROUP  = 15;               
+export const MAX_PER_GROUP = 14;
 const SEARCH_TTL     = 30 * 60 * 1000;   
 const AGGREGATE_TTL  = 10 * 60 * 1000;   
 const MIN_MATCH_SCORE = 0.60;            
@@ -19,6 +19,18 @@ const LANG_ALIASES = {
 const LANG_LABELS = { ar: "العربية", en: "الإنجليزية", ja: "اليابانية" };
 const HEADERS = { "User-Agent": "SunkenBot/2.0 (manga command)" };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function sendMangaMessage(api, body, threadID, callback, messageID, bypassHumanQueue = false) {
+  if (bypassHumanQueue) {
+    const rawApi = api?.__rawApi || api;
+    if (typeof rawApi?.sendMessage !== "function") throw new Error("Raw sendMessage API is unavailable.");
+    return messageID !== undefined && messageID !== null
+      ? rawApi.sendMessage(body, threadID, callback, messageID)
+      : rawApi.sendMessage(body, threadID, callback);
+  }
+  return global.safeSend(api, body, threadID, callback, messageID);
+}
+
 function bigrams(str) {
   const s = str.toLowerCase().replace(/\s+/g, " ").trim();
   const out = [];
@@ -429,7 +441,7 @@ const downloadAllWithLimit3asq = (jobId, count, limit = 6) =>
   downloadWithLimit(Array.from({ length: count }, (_, i) => i), (i) => downloadJobImage3asq(jobId, i), limit);
 // Try the 3asq bridge as a fallback source when MangaDex has no match/chapter.
 // Returns true if it successfully sent the chapter, false otherwise.
-async function tryFallback3asq({ api, threadID, messageID, rawName, chapterNumber }) {
+async function tryFallback3asq({ api, threadID, messageID, rawName, chapterNumber, bypassHumanQueue = false }) {
   if (!BRIDGE_URL_3ASQ || !chapterNumber) return false;
   try {
     const jobId = await createJob3asq(rawName, chapterNumber);
@@ -442,13 +454,13 @@ async function tryFallback3asq({ api, threadID, messageID, rawName, chapterNumbe
       const batch = validFiles.slice(i, i + MAX_PER_GROUP);
       const isFirst = i === 0;
       await new Promise((resolve, reject) => {
-        global.safeSend(
+        sendMangaMessage(
           api,
           { body: isFirst ? `📖 ${rawName} — الفصل ${chapterNumber} (مصدر بديل)` : "", attachment: batch.map(f => fs.createReadStream(f)) },
-          threadID, (err) => (err ? reject(err) : resolve()), isFirst ? messageID : null
+          threadID, (err) => (err ? reject(err) : resolve()), isFirst ? messageID : null, bypassHumanQueue
         );
       });
-      if (i + MAX_PER_GROUP < validFiles.length) await sleep(600);
+      if (!bypassHumanQueue && i + MAX_PER_GROUP < validFiles.length) await sleep(600);
     }
     await Promise.allSettled(validFiles.map(f => fs.remove(f)));
     return true;
@@ -476,11 +488,12 @@ export default {
       "{pn}مانجا <اسم المانجا> (بدون رقم فصل) — يعرض نطاقات الفصول العربية المتوفرة/المفقودة، مثال: {pn}مانجا one piece",
     ],
   },
-  onStart: async function ({ api, event, args }) {
+  onStart: async function ({ api, event, args, bypassHumanQueue = false }) {
     const { threadID, messageID } = event;
+    const send = (body, targetThreadID = threadID, callback = null, targetMessageID = undefined) =>
+      sendMangaMessage(api, body, targetThreadID, callback, targetMessageID, bypassHumanQueue);
     if (!args.length) {
-      return global.safeSend(
-        api,
+      return send(
         "📖 قارئ المانجا\n\n" +
           "📝 الاستخدام: manga [اسم المانجا] [رقم الفصل]\n\n" +
           "💡 مثال:\n  manga one piece 13\n  manga one piece 13 en",
@@ -504,8 +517,7 @@ export default {
       const rawName = workingArgs.join(" ").trim();
       const mangaQuery = cleanQuery(rawName);
       if (!mangaQuery) {
-        return global.safeSend(
-          api,
+        return send(
           "📖 قارئ المانجا\n\n" +
             "📝 الاستخدام:\n" +
             "  manga [اسم المانجا] [رقم الفصل] — لقراءة فصل معيّن\n" +
@@ -521,8 +533,7 @@ export default {
     const chapterNumber = lastToken;
     const rawName = workingArgs.slice(0, -1).join(" ").trim();
     if (!rawName) {
-      return global.safeSend(
-        api,
+      return send(
         "📖 قارئ المانجا\n\n" +
           "📝 الاستخدام: manga [اسم المانجا] [رقم الفصل]\n\n" +
           "💡 مثال:\n  manga one piece 13",
@@ -533,7 +544,7 @@ export default {
     }
     const mangaQuery = cleanQuery(rawName);
     if (!mangaQuery) {
-      return global.safeSend(api, "❗ يرجى تحديد رقم الفصل.", threadID, null, messageID);
+      return send("❗ يرجى تحديد رقم الفصل.", threadID, null, messageID);
     }
     try {
       let candidates;
@@ -591,8 +602,7 @@ export default {
             : `📖 ${mangaTitle} — الفصل ${chapterNumber}`;
         try {
           await new Promise((resolve, reject) => {
-            global.safeSend(
-              api,
+            send(
               { body, attachment: group.map((f) => fs.createReadStream(f)) },
               threadID,
               (err) => (err ? reject(err) : resolve()),
@@ -602,12 +612,11 @@ export default {
         } catch (err) {
           allSent = false;
         }
-        if (i + MAX_PER_GROUP < validFiles.length) await sleep(600);
+        if (!bypassHumanQueue && i + MAX_PER_GROUP < validFiles.length) await sleep(600);
       }
       await Promise.allSettled(validFiles.map((f) => fs.remove(f)));
       if (!allSent || validFiles.length !== pageUrls.length) {
-        global.safeSend(
-          api,
+        await send(
           "⚠️ تم إرسال جزء من الفصل فقط.\nيمكنك إعادة المحاولة.",
           threadID,
           null,
@@ -621,10 +630,10 @@ export default {
         userMsg.includes("غير متوفر بـ") ||
         userMsg.includes("تعذر الاتصال بخادم المانجا");
       if (shouldTryFallback) {
-        const sentFallback = await tryFallback3asq({ api, threadID, messageID, rawName, chapterNumber });
+        const sentFallback = await tryFallback3asq({ api, threadID, messageID, rawName, chapterNumber, bypassHumanQueue });
         if (sentFallback) return;
       }
-      global.safeSend(api, userMsg, threadID, null, messageID);
+      await send(userMsg, threadID, null, messageID);
     }
   },
 };

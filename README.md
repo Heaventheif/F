@@ -52,3 +52,10 @@ The test suite covers validation, payload hardening, argument parsing, and exist
 - `BETADASH_RATE_LIMIT` — local request budget per 10-second window; default `8`.
 
 Never commit `APPSTATE`, API keys, or other secrets. Render environment variables should be managed in the Render dashboard or secret environment configuration.
+
+
+## Mangalik manga reader
+
+Use `mangalik <manga name> <chapter>` (alias `mangalek`) to send chapter pages in messages of at most 14 images. One Piece is fetched from StarzManga first (`starzmanga.com/manga/one-piece/`); Mangalik (`mangalik.net`, including its `pieceone` One Piece slug) is the alternate source. If those scrapers cannot provide the chapter, the command invokes the existing `manga` command directly as the final fallback.
+
+Configure one or more Firecrawl API keys in the service environment as `FIRECRAWL_API`, separated by commas. The client rotates keys and fails over on authorization, quota, and transient server errors; keys are never logged. This command sends directly without the bot’s humanized per-thread queue or artificial inter-batch pause. Actual platform/API rate-limit failures are still treated as failures; the bot does not retry by flooding the service.
