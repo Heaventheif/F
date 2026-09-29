@@ -1,140 +1,187 @@
-const BOT_NAME = "𝗦𝘂𝗻𝗸𝗲𝗻𝗕𝗼𝘁";
-const PAGE_MAX_LEN = 7000; 
-function getLiveCommands() {
+const BOT_NAME = "SunkenBot";
+const PAGE_MAX_LEN = 6000;
+const EMOJI_RE = /[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji_Modifier}\uFE0E\uFE0F\u200D]|\p{Regional_Indicator}{2}/gu;
+
+export function stripEmoji(value) {
+  return String(value ?? "").replace(EMOJI_RE, "").replace(/\s+/g, " ").trim();
+}
+
+const CATEGORY_ORDER = [
+  "ذكاء اصطناعي",
+  "وسائط وتحميل",
+  "مانجا وروايات",
+  "ثقافة وترفيه",
+  "ألعاب وترفيه",
+  "أدوات عامة",
+  "إدارة وإشراف",
+  "أخرى",
+];
+const CATEGORY_RENAMES = new Map([
+  ["admin", "إدارة وإشراف"],
+  ["وسائط", "وسائط وتحميل"],
+]);
+
+function normalizeCategory(value) {
+  const category = stripEmoji(value) || "أخرى";
+  return CATEGORY_RENAMES.get(category.toLowerCase()) || category;
+}
+
+export function getLiveCommands() {
   const map = global.commands;
   if (!(map instanceof Map) || map.size === 0) return [];
-  const seen = new Map(); 
+  const seen = new Map();
   for (const cmd of map.values()) {
     const cfg = cmd?.config;
     if (!cfg?.name) continue;
     if (cfg.hidden || cfg.enabled === false) continue;
-    if (!seen.has(cfg.name)) seen.set(cfg.name, cmd);
+    if (!seen.has(String(cfg.name).toLowerCase())) seen.set(String(cfg.name).toLowerCase(), cmd);
   }
   return [...seen.values()];
 }
-function toEntry(cmd) {
-  const cfg = cmd.config || {};
+
+export function toEntry(cmd) {
+  const cfg = cmd?.config || {};
+  const description = stripEmoji(cfg.description || "لا يوجد وصف");
   return {
-    name: String(cfg.name || ""),
-    aliases: Array.isArray(cfg.aliases) ? cfg.aliases.map(String) : [],
-    desc: String(cfg.description || "بدون وصف"),
-    cat: String(cfg.category || "أخرى"),
+    name: stripEmoji(cfg.name || ""),
+    aliases: Array.isArray(cfg.aliases) ? cfg.aliases.map(stripEmoji).filter(Boolean) : [],
+    desc: (description || "لا يوجد وصف").slice(0, 240),
+    cat: normalizeCategory(cfg.category),
   };
 }
-const CATEGORY_ICONS = {
-  "أدوات عامة": "🧰",
-  "إدارة وإشراف": "🛡️",
-  "ذكاء اصطناعي": "🤖",
-  "وسائط وتحميل": "🎬",
-  "ألعاب وترفيه": "🎮",
-  "مانجا وروايات": "📖",
-};
-const DEFAULT_ICON = "📂";
-function buildPages(entries) {
+
+function orderedCategories(byCat) {
+  const rank = new Map(CATEGORY_ORDER.map((category, index) => [category, index]));
+  return [...byCat.entries()].sort(([a], [b]) => {
+    const rankA = rank.has(a) ? rank.get(a) : CATEGORY_ORDER.length;
+    const rankB = rank.has(b) ? rank.get(b) : CATEGORY_ORDER.length;
+    return rankA - rankB || a.localeCompare(b, "ar");
+  });
+}
+
+export function buildPages(entries) {
   const byCat = new Map();
-  for (const e of entries) {
-    if (!byCat.has(e.cat)) byCat.set(e.cat, []);
-    byCat.get(e.cat).push(e);
+  for (const entry of entries) {
+    const category = normalizeCategory(entry.cat);
+    if (!byCat.has(category)) byCat.set(category, []);
+    byCat.get(category).push({
+      name: stripEmoji(entry.name),
+      aliases: (entry.aliases || []).map(stripEmoji).filter(Boolean),
+      desc: stripEmoji(entry.desc || "لا يوجد وصف").slice(0, 240),
+    });
   }
+
   const header =
-    `┏━━━━━━━━━━━━━━━━━━━┓\n┃  ✦ ${BOT_NAME} ✦\n┃  دليل الأوامر الكامل\n┗━━━━━━━━━━━━━━━━━━━┛\n` +
-    `📌 ${entries.length} أمرًا في ${byCat.size} أقسام │ اكتب اسم الأمر أو بديله لإطلاقه\n\n`;
-  const footer =
-    `\n💡 تلميح: ابحث بكتابة «مساعدة + كلمة» (اسم/بديل/جزء من الوصف)\n` +
-    `   مثال: «مساعدة يوتيوب»\n\n⌁ ${BOT_NAME} — بوت المانجا والروايات والذكاء الاصطناعي`;
-  let block = "";
-  let n = 0;
-  for (const [cat, cmds] of byCat) {
-    const icon = CATEGORY_ICONS[cat] || DEFAULT_ICON;
-    block += `${icon} ${cat} (${cmds.length})\n${"─".repeat(22)}\n`;
-    for (const c of cmds) {
-      n++;
-      const aliasTxt = c.aliases.length ? `${c.name}  ·  ${c.aliases.join("، ")}` : c.name;
-      block += `${String(n).padStart(2, "0")}. ${aliasTxt}\n`;
-    }
-    block += "\n";
-  }
+    `${BOT_NAME}\nدليل الأوامر\n${"=".repeat(24)}\n` +
+    `عدد الأوامر: ${entries.length} | الأقسام: ${byCat.size}\n` +
+    "اكتب «مساعدة <كلمة>» للبحث بالاسم أو البديل أو الوصف.\n\n";
+  const footer = "\nللبحث عن أمر: مساعدة <كلمة>\nمثال: مساعدة يوتيوب";
   const pages = [];
-  const lines = block.split("\n");
-  let cur = header;
-  for (const line of lines) {
-    const chunk = line + "\n";
-    if (cur.length + chunk.length + footer.length > PAGE_MAX_LEN && cur !== header) {
-      pages.push(cur.trim());
-      cur = "";
+  let current = header;
+  let number = 0;
+
+  const pushPage = () => {
+    pages.push(`${current.trimEnd()}\nتابع القائمة في الرسالة التالية.`);
+    current = header;
+  };
+
+  for (const [category, commands] of orderedCategories(byCat)) {
+    commands.sort((a, b) => a.name.localeCompare(b.name, "ar"));
+    const categoryHeader = `${category} (${commands.length})\n${"─".repeat(24)}\n`;
+    if (current.length + categoryHeader.length + footer.length > PAGE_MAX_LEN && current !== header) {
+      pushPage();
     }
-    cur += chunk;
+    current += categoryHeader;
+
+    for (const command of commands) {
+      number += 1;
+      const aliases = command.aliases.length ? ` (البدائل: ${command.aliases.join("، ")})` : "";
+      const block = `${String(number).padStart(2, "0")}. ${command.name}${aliases}\n   ${command.desc || "لا يوجد وصف"}\n`;
+      if (current.length + block.length + footer.length > PAGE_MAX_LEN && current !== header) {
+        pushPage();
+        current += categoryHeader;
+      }
+      current += block;
+    }
+    current += "\n";
   }
-  cur += footer;
-  pages.push(cur.trim());
+
+  current += footer;
+  pages.push(current.trim());
   return pages;
 }
-function searchEntries(entries, q) {
-  return entries.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      c.aliases.some((a) => a.toLowerCase().includes(q)) ||
-      c.desc.toLowerCase().includes(q),
+
+function searchEntries(entries, query) {
+  return entries.filter((command) =>
+    command.name.toLowerCase().includes(query) ||
+    command.aliases.some((alias) => alias.toLowerCase().includes(query)) ||
+    command.desc.toLowerCase().includes(query) ||
+    command.cat.toLowerCase().includes(query),
   );
 }
-// safeSend يُحلّ في وقت التنفيذ لا في وقت التحميل
-// (bot-enhancer يُسجّله بعد تحميل الأوامر، لذا يجب التحقق داخل كل handler)
-function S(api, text, threadID, _unused, replyToID) {
-  const ss = typeof global.safeSend === "function" ? global.safeSend : null;
-  if (ss) return ss(api, text, threadID, null, replyToID);
-  return api.sendMessage(text, threadID, replyToID).catch(e => {
-    console.error("[help] " + e.message);
+
+// Resolve safeSend at runtime because the bot enhancer registers it after loading commands.
+function send(api, text, threadID, replyToID) {
+  const safeSend = typeof global.safeSend === "function" ? global.safeSend : null;
+  if (safeSend) return safeSend(api, text, threadID, null, replyToID);
+  return api.sendMessage(text, threadID, replyToID).catch((error) => {
+    console.error("[help] " + error.message);
     return null;
   });
 }
+
 export default {
   config: {
     name: "help",
     aliases: ["اوامر", "مساعدة"],
-    version: "3.0.0",
+    version: "4.0.0",
     author: "Sunken",
     countDown: 3,
     role: 0,
     category: "أدوات عامة",
-    description: "دليل الأوامر الكامل مرتبًا بالفئات مع وصف لكل أمر وبدائله + بحث مدمج (مبني ديناميكيًا من الأوامر المسجّلة فعليًا)",
+    description: "قائمة الأوامر مرتبة حسب الفئات مع وصف وبحث بالاسم أو البديل أو الوصف",
     usage: [
-      "{pn}مساعدة — عرض دليل الأوامر كاملًا",
-      "{pn}مساعدة — كلمة — البحث في الأوامر (بالاسم أو البديل أو جزء من الوصف)",
+      "{pn}مساعدة — عرض قائمة الأوامر",
+      "{pn}مساعدة <كلمة> — البحث في الأوامر",
     ],
   },
   onStart: async ({ api, event, args }) => {
     const entries = getLiveCommands().map(toEntry);
     if (!entries.length) {
-      await S(api, "⚠️ تعذّر جلب قائمة الأوامر حاليًا — حاول لاحقًا.", event.threadID, null, event.messageID);
+      await send(api, "تعذر جلب قائمة الأوامر حالياً. حاول مرة أخرى لاحقاً.", event.threadID, event.messageID);
       return;
     }
-    const q = (args || []).join(" ").trim().toLowerCase();
-    if (q) {
-      const results = searchEntries(entries, q);
+
+    const query = stripEmoji((args || []).join(" ")).toLowerCase();
+    if (query) {
+      const results = searchEntries(entries, query);
       if (results.length === 0) {
-        await S(api, "لم يعثر على أوامر تطابق «" + q + "» — جرّب كلمة أخرى", event.threadID, null, event.messageID);
+        await send(api, `لم يعثر على أوامر تطابق «${query}». جرّب كلمة أخرى.`, event.threadID, event.messageID);
         return;
       }
-      const txt =
-        `🔍 نتائج البحث عن «${q}» (${results.length})\n${"─".repeat(22)}\n` +
-        results.map((c, i) => `${String(i + 1).padStart(2, "0")}. ${c.name}${c.aliases.length ? `  ·  ${c.aliases.join("، ")}` : ""}\n    ↳ ${c.desc}`).join("\n");
-      await S(api, txt, event.threadID, null, event.messageID);
+      const body = results
+        .map((command, index) => {
+          const aliases = command.aliases.length ? ` (البدائل: ${command.aliases.join("، ")})` : "";
+          return `${String(index + 1).padStart(2, "0")}. ${command.name}${aliases} — ${command.cat}\n   ${command.desc}`;
+        })
+        .join("\n");
+      await send(api, `نتائج البحث عن «${query}» (${results.length})\n${"─".repeat(24)}\n${body}`, event.threadID, event.messageID);
       return;
     }
+
     const pages = buildPages(entries);
-    let lastId = event.messageID || null;
+    let replyToID = event.messageID || null;
     for (const page of pages) {
-      const res = await S(api, page, event.threadID, null, lastId);
-      lastId = res?.messageID || null;
+      const result = await send(api, page, event.threadID, replyToID);
+      replyToID = result?.messageID || null;
     }
   },
 };
 
-// ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */
 export const $plugin = {
-  name: 'xx-commands-general-help',
-  meta: { category: 'command-general', path: 'src/commands/general/help.js' },
+  name: "xx-commands-general-help",
+  meta: { category: "command-general", path: "src/commands/general/help.js" },
   setup(_ctx) {
     // see module exports
   },

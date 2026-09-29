@@ -61,46 +61,6 @@ export function parseFactResponse(raw) {
   return getTextFromKeys(raw, ["fact", "text", "content", "result"]);
 }
 
-export function parseAdviceResponse(raw) {
-  return getTextFromKeys(raw, ["advice", "quote", "text", "content"])
-    || getTextFromKeys(raw?.slip, ["advice", "quote", "text"]);
-}
-
-export function parseJokeResponse(raw) {
-  const whole = getTextFromKeys(raw, ["joke", "text", "content"]);
-  if (whole) return whole;
-  const setup = getTextFromKeys(raw, ["setup"]);
-  const punchline = getTextFromKeys(raw, ["punchline", "delivery"]);
-  return [setup, punchline].filter(Boolean).join("\n");
-}
-
-function firstObject(value) {
-  if (Array.isArray(value)) return value[0] || null;
-  return value && typeof value === "object" ? value : null;
-}
-
-export function parseTriviaResponse(raw) {
-  const item = firstObject(raw?.results)
-    || firstObject(raw?.data?.results)
-    || firstObject(raw?.result)
-    || firstObject(raw?.data?.result)
-    || raw?.data
-    || raw;
-  if (!item || typeof item !== "object") return null;
-  const question = decodeHtml(item.question || item.text || "");
-  const correctAnswer = decodeHtml(item.correct_answer || item.correctAnswer || item.answer || "");
-  const incorrect = item.incorrect_answers || item.incorrectAnswers || item.options || [];
-  const options = Array.isArray(incorrect) ? incorrect.map(decodeHtml).filter(Boolean) : [];
-  if (!question || !correctAnswer) return null;
-  return {
-    question,
-    correctAnswer,
-    options: [...options, correctAnswer],
-    category: decodeHtml(item.category || ""),
-    difficulty: decodeHtml(item.difficulty || ""),
-  };
-}
-
 export function parseSurahResponse(raw) {
   const payload = raw?.data?.data || raw?.data || raw;
   const ayahs = payload?.ayahs;
@@ -158,27 +118,6 @@ export async function getFahimFact() {
   const fact = parseFactResponse(data);
   if (!fact) throw new Error("لم تصل معلومة قابلة للعرض.");
   return fact;
-}
-
-export async function getFahimAdvice() {
-  const data = await getJson("/quotes/advice/v1");
-  const advice = parseAdviceResponse(data);
-  if (!advice) throw new Error("لم تصل نصيحة قابلة للعرض.");
-  return advice;
-}
-
-export async function getFahimJoke() {
-  const data = await getJson("/quotes/joke");
-  const joke = parseJokeResponse(data);
-  if (!joke) throw new Error("لم تصل نكتة قابلة للعرض.");
-  return joke;
-}
-
-export async function getFahimTrivia() {
-  const data = await getJson("/education/quiz/trivia");
-  const trivia = parseTriviaResponse(data);
-  if (!trivia) throw new Error("لم يصل سؤال معلومات عامة صالح.");
-  return trivia;
 }
 
 export async function getFahimSurah(surahNumber) {
