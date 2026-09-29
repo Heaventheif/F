@@ -2,20 +2,39 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildPages, getLiveCommands, toEntry } from "../src/cmds/help.js";
 
-test("help pages remove emoji and list categories in a stable, normalized order", () => {
+test("help pages are compact, emoji-free, and use aligned category/name rows", () => {
   const entries = [
     toEntry({ config: { name: "admin-tool", aliases: ["ادارة 🛡️"], category: "admin", description: "Manage groups 🧰" } }),
     toEntry({ config: { name: "media-tool", category: "وسائط", description: "Download media 📥" } }),
     toEntry({ config: { name: "ai-tool", category: "ذكاء اصطناعي", description: "Ask an assistant 🤖" } }),
   ];
-  const menu = buildPages(entries).join("\n");
+  const pages = buildPages(entries);
+  const menu = pages.join("\n");
 
+  assert.equal(pages.length, 1);
+  assert.ok(menu.length < 300);
   assert.doesNotMatch(menu, /\p{Extended_Pictographic}/u);
   assert.match(menu, /إدارة وإشراف/);
   assert.match(menu, /وسائط وتحميل/);
   assert.ok(menu.indexOf("ذكاء اصطناعي") < menu.indexOf("وسائط وتحميل"));
   assert.ok(menu.indexOf("وسائط وتحميل") < menu.indexOf("إدارة وإشراف"));
-  assert.match(menu, /Manage groups/);
+  assert.match(menu, /  ai-tool/);
+  assert.match(menu, /  media-tool/);
+  assert.doesNotMatch(menu, /Manage groups|Download media|assistant/);
+});
+
+test("large help catalogs are split into short messages", () => {
+  const entries = Array.from({ length: 240 }, (_, index) => ({
+    name: `command-${String(index).padStart(3, "0")}`,
+    aliases: [],
+    desc: "A long description that should not be shown in the compact directory.",
+    cat: "ذكاء اصطناعي",
+  }));
+  const pages = buildPages(entries);
+
+  assert.ok(pages.length > 1);
+  assert.ok(pages.every((page) => page.length <= 1500));
+  assert.ok(pages.every((page) => !page.includes("long description")));
 });
 
 test("live help list filters hidden and disabled commands and deduplicates aliases", () => {
