@@ -38,3 +38,8 @@ services:
       # Your Facebook appState JSON — set this manually in the Render dashboard
       - key: APPSTATE
         sync: false
+      # yt-dlp API endpoint and secret key
+      - key: YTDLP_URL
+        value: https://ytdlp-api-gukc.onrender.com
+      - key: YTDLP_KEY
+        sync: false

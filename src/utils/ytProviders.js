@@ -6,6 +6,7 @@ import http from "./fetchHttp.js";
 import vreden from "@vreden/youtube_scraper";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
+import { downloadMedia } from "./mediaApi.js";
 
 const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
 const MAX_SEARCH_CACHE_ENTRIES = 100;
@@ -153,7 +154,20 @@ const ytDlpStreamProvider = {
   },
 };
 
-const providers = [vredenProvider, ytDlpStreamProvider];
+const ytdlpApiProvider = {
+  name: "ytdlp-api",
+  async download(url, wantMp4) {
+    const result = await downloadMedia(url, { type: wantMp4 ? "video" : "audio", q: 360 });
+    return {
+      filePath: result.filePath,
+      title: result.title || "YouTube media",
+      duration: 0,
+      uploader: "",
+    };
+  },
+};
+
+const providers = [ytdlpApiProvider, vredenProvider, ytDlpStreamProvider];
 
 export { providers };
 

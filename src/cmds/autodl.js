@@ -1,3 +1,4 @@
+import { downloadMedia } from "../utils/mediaApi.js";
 "use strict";
 import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
@@ -5,7 +6,7 @@ import os from "os";
 import path from "path";
 import { streamAndSend } from "../utils/mediaStream.js";
 import { directSend, directSendParts } from "../utils/directSend.js";
-import { downloadWithFallback, cleanTemp } from "../utils/ytProviders.js";
+import { cleanTemp } from "../utils/ytProviders.js";
 import { normalizeMediaUrl } from "../utils/urlNormalizer.js";
 import { getYozoraInfo, getYozoraTitle, buildYozoraDownloadUrl } from "../utils/yozora.js";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
@@ -292,15 +293,15 @@ async function resolveInstagram(url) {
 }
 async function resolveYouTube(url) {
   try {
-    const result = await downloadWithFallback(url, true); 
+    const result = await downloadMedia(url, { type: "video", q: 720 });
     return {
       title: result.title || "YouTube Video",
       filePath: result.filePath,
       platform: "youtube",
-      isFile: true,     
+      isFile: true,
     };
   } catch (e) {
-    throw new Error(`فشل تحميل يوتيوب عبر Vreden: ${e.message}`);
+    throw new Error(`فشل تحميل يوتيوب عبر YTDLP API: ${e.message}`);
   }
 }
 async function resolveMetaMedia(url) {
@@ -411,32 +412,17 @@ async function getSoundCloudClientId() {
   throw new Error("تعذّر استخراج client_id من SoundCloud");
 }
 async function resolveSoundCloud(url) {
-  let clientId = await getSoundCloudClientId();
-  const resolveTrack = async (cid) => {
-    const { data: track } = await http.get("https://api-v2.soundcloud.com/resolve", {
-      params: { url, client_id: cid }, timeout: 20000,
-    });
-    return track;
-  };
-  let track;
   try {
-    track = await resolveTrack(clientId);
+    const result = await downloadMedia(url, { type: "audio" });
+    return {
+      title: result.title || "SoundCloud Audio",
+      filePath: result.filePath,
+      platform: "soundcloud",
+      isFile: true,
+    };
   } catch (e) {
-    if (e?.response?.status === 401) {
-      _scClientIdCache = null;
-      clientId = await getSoundCloudClientId();
-      track = await resolveTrack(clientId);
-    } else {
-      throw e;
-    }
+    throw new Error(`فشل تحميل SoundCloud عبر YTDLP API: ${e.message}`);
   }
-  const transcodings = track?.media?.transcodings || [];
-  const best = transcodings.find(t => t.format?.protocol === "progressive") || transcodings[0];
-  if (!best?.url) throw new Error("لم يُعثر على رابط تدفّق للمقطع");
-  const { data: streamInfo } = await http.get(best.url, {
-    params: { client_id: clientId }, timeout: 20000,
-  });
-  return { title: track?.title || "SoundCloud Audio", audioUrl: streamInfo?.url, platform: "soundcloud" };
 }
 async function resolveSpotify(url) {
   const { data: s } = await http.get(
