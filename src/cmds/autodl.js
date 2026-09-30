@@ -12,17 +12,10 @@ function extractUrl(text) {
 }
 
 function extractUrlFromEvent(event) {
-  const bodyUrl = extractUrl(event?.body) || extractUrl(event?.messageReply?.body);
-  if (bodyUrl) return bodyUrl;
-  for (const attachment of [...(event?.attachments || []), ...(event?.messageReply?.attachments || [])]) {
-    const direct = attachment?.url || attachment?.facebookUrl || attachment?.attachUrl || attachment?.source || attachment?.target?.url;
-    if (direct) return direct;
-    try {
-      const nested = extractUrl(JSON.stringify(attachment));
-      if (nested) return nested;
-    } catch (_) {}
-  }
-  return null;
+  // Do not inspect attachment URLs here. Facebook includes CDN URLs in every
+  // photo/video attachment, and treating those as user-provided download links
+  // makes autodl re-upload every media message in the group.
+  return extractUrl(event?.body) || extractUrl(event?.messageReply?.body);
 }
 
 function parseDownloadType(args = []) {
