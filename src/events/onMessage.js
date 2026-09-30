@@ -8,7 +8,9 @@ const recordFriendEvent = () => {};
 // ─── Bounded concurrency queue ───────────────────────────────────
 // Prevents unbounded concurrent command execution that can cause
 // unhandled-rejection crashes under Node 20+ and Meta rate-limiting.
-const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_COMMANDS || "5", 10);
+const configuredConcurrency = Number.parseInt(process.env.MAX_CONCURRENT_COMMANDS || "5", 10);
+const MAX_CONCURRENT = Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
+  ? Math.min(configuredConcurrency, 50) : 5;
 let _activeSlots = 0;
 const _pendingQueue = [];
 

@@ -115,13 +115,17 @@ export const handleMessage = async (rawApi, event) => {
           ? { ...event, commandMessageID: event.messageID, messageID: replyTargetID }
           : event;
         const replyMessage = buildMessageAPI(api, threadID, replyTargetID);
-        Promise.resolve(handler({ api, event: replyEvent, message: replyMessage, Reply: replyData }))
-          .catch(e => console.error("[REPLY ERROR]", e.message));
+        await Promise.resolve().then(() =>
+          handler({ api, event: replyEvent, message: replyMessage, Reply: replyData })
+        ).catch(e => console.error("[REPLY ERROR]", e.message));
       }
     }
     return;
   }
-  const prefixes = (global.config?.Prefix || [""]).map(String);
+  // Check explicit prefixes before the empty (prefixless) option. Otherwise
+  // ["", "!"] consumes every message before "!" can ever match.
+  const prefixes = (global.config?.Prefix || [""]).map(String)
+    .sort((a, b) => b.length - a.length);
   let resolvedText  = null;
   let matchedPrefix = "";
   for (const pfx of prefixes) {
@@ -183,22 +187,25 @@ export const handleMessage = async (rawApi, event) => {
     return;
   }
   const t0 = Date.now();
-  // BUG-05 FIX: .catch() يمنع unhandled rejection إذا فشل الـ IIFE خارج try/catch
-  (async () => {
-    const timer = timing.start(`command:${commandName}`);
+  // Keep the dispatch queue slot until the command actually finishes.
+  // Fire-and-forget here bypassed MAX_CONCURRENT_COMMANDS entirely.
+  const timer = timing.start(`command:${commandName}`);
+  try {
+    const ctx = buildCommandContext({ api, event, args, role, prefix: matchedPrefix, isGroupAdmin });
+    const fn  = HANDLER_KEYS.map(k => command[k]).find(f => typeof f === "function");
+    if (fn) await fn(ctx);
+    timer.end();
+    global.perfManager?.trackRequest(t0);
+  } catch (err) {
+    timer.end("(فشل)");
+    global.perfManager?.trackError();
+    console.error(`[command:${commandName}]`, err.message);
     try {
-      const ctx = buildCommandContext({ api, event, args, role, prefix: matchedPrefix, isGroupAdmin });
-      const fn  = HANDLER_KEYS.map(k => command[k]).find(f => typeof f === "function");
-      if (fn) await fn(ctx);
-      timer.end();
-      global.perfManager?.trackRequest(t0);
-    } catch (err) {
-      timer.end("(فشل)");
-      global.perfManager?.trackError();
-      console.error(`[command:${commandName}]`, err.message);
-      api.sendMessage("⚠️ حدث خطأ أثناء تنفيذ الأمر — تم إبلاغ المطوّر تلقائياً.", threadID, null, replyTargetID);
+      await api.sendMessage("⚠️ حدث خطأ أثناء تنفيذ الأمر — تم إبلاغ المطوّر تلقائياً.", threadID, null, replyTargetID);
+    } catch (sendError) {
+      console.error(`[command:${commandName}:send]`, sendError.message);
     }
-  })().catch(err => console.error(`[ROUTER:IIFE:${commandName}]`, err.message));
+  }
 };
 export const handleReaction = (api, event) => {
   const msgID = event.messageID;
@@ -216,15 +223,19 @@ export const handleEvent = async (rawApi, event) => {
   const firstWord = event.body?.trim().split(/ +/)[0]?.toLowerCase();
   // نحسب مرة واحدة هل firstWord يُحيل إلى أيّ أمر (سواء باسمه أو alias)
   const resolvedCmd = firstWord ? global.commands.get(firstWord) : null;
+  const handlers = [];
   for (const cmd of global.eventCommands) {
     if (!cmd.onChat) continue;
     const hasAtt = (event.attachments?.length > 0);
     if (!event.messageID || (!event.body && !hasAtt)) continue;
     // تجاهل إذا كانت الرسالة تُطلق هذا الأمر بالذات (اسماً أو alias أو nonPrefix)
     if (resolvedCmd && resolvedCmd === cmd) continue;
-    Promise.resolve(cmd.onChat({ api, event, message: buildMessageAPI(api, event.threadID, event.messageID) }))
-      .catch(() => {});
+    handlers.push(Promise.resolve().then(() =>
+      cmd.onChat({ api, event, message: buildMessageAPI(api, event.threadID, event.messageID) })
+    ));
   }
+  // Keep the queue slot until onChat handlers settle too.
+  await Promise.allSettled(handlers);
 };
 
 // ─── Plugin Descriptor ──────────────────────────────────────────

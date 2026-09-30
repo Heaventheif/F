@@ -153,13 +153,18 @@ export function persistAppState(state, source = "auto") {
     return false;
   }
 
-  // Merge-on-Save: ادمج مع الحالة الموجودة بدلاً من الاستبدال الكامل
-  const existing   = _inMemoryState || (_atomicRead(STATE_FILE) ?? []);
+  // Include the disk copy even when an env state has populated the memory cache:
+  // the env may contain fewer cookies than the previous persisted session.
+  const onDisk     = _atomicRead(STATE_FILE);
+  const existing   = mergeAppStates(onDisk, _inMemoryState);
   const merged     = mergeAppStates(existing, state);
   const normalized = _normalizeAppState(merged);
   const newHash    = _hashState(normalized);
 
-  if (newHash === _inMemoryHash) return false; // لا تغيير
+  // An unchanged memory cache does not imply the encrypted file exists (e.g.
+  // resolveAppState(envState) sets the cache before the first save).
+  if (newHash === _inMemoryHash && onDisk &&
+      newHash === _hashState(_normalizeAppState(onDisk))) return false;
 
   _updateMemoryCache(normalized, newHash);
 
@@ -243,7 +248,7 @@ function _normalizeAppState(state) {
 }
 
 function _hashState(state) {
-  try { return crypto.createHash("md5").update(state.map(c => `${c.key}=${c.value}`).join("|")).digest("hex"); }
+  try { return crypto.createHash("sha256").update(JSON.stringify(state)).digest("hex"); }
   catch { return null; }
 }
 
