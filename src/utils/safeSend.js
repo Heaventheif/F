@@ -5,6 +5,17 @@
 const MIN_SEND_GAP_MS      = 1_500;
 const PRIORITY_SEND_GAP_MS =   800;
 const JITTER_RANGE_MS      =   400; // ±200 ms applied to every outgoing message
+const configuredSendTimeout = Number.parseInt(process.env.FB_SEND_TIMEOUT_MS || "", 10);
+const SEND_TIMEOUT_MS = Number.isSafeInteger(configuredSendTimeout) && configuredSendTimeout > 0
+  ? Math.min(configuredSendTimeout, 300_000) : 60_000;
+function sendWithTimeout(startSend) {
+  let timer;
+  const sendPromise = Promise.resolve().then(startSend);
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Facebook sendMessage timed out after ${SEND_TIMEOUT_MS}ms`)), SEND_TIMEOUT_MS);
+  });
+  return Promise.race([sendPromise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
 const _threadGates = new Map();
 function _gate(key, gapMs) {
   let gate = _threadGates.get(key);
@@ -66,9 +77,9 @@ function _gatedSendRaw(api, body, threadID, callback, messageID) {
     gate.lastSendAt = Date.now();
     let result;
     try {
-      result = messageID !== undefined
-        ? await rawApi.sendMessage(body, threadID, callback, messageID)
-        : await rawApi.sendMessage(body, threadID, callback);
+      result = await sendWithTimeout(() => messageID !== undefined
+        ? rawApi.sendMessage(body, threadID, callback, messageID)
+        : rawApi.sendMessage(body, threadID, callback));
     } catch (sendErr) {
       // On HTTP 429 / 405 back the gate off by 30–60 s so subsequent
       // messages in this thread don't pile on and worsen the rate-limit.
@@ -95,9 +106,9 @@ function prioritySend(api, body, threadID, callback, messageID) {
     const wait = (PRIORITY_SEND_GAP_MS + _jitter) - (Date.now() - gate.lastSendAt);
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     gate.lastSendAt = Date.now();
-    const result = messageID !== undefined
-      ? await rawApi.sendMessage(body, threadID, callback, messageID)
-      : await rawApi.sendMessage(body, threadID, callback);
+    const result = await sendWithTimeout(() => messageID !== undefined
+      ? rawApi.sendMessage(body, threadID, callback, messageID)
+      : rawApi.sendMessage(body, threadID, callback));
     return result;
   });
   // الطابور يكمل حتى لو فشلت عملية بالأولوية (لا يُجمّد السلسلة)
