@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 
-const BASE = (process.env.YTDLP_URL || "https://ytdlp-api-gukc.onrender.com").replace(/\/+$/, "");
+const BASE = "https://ytdlp-api-gukc.onrender.com";
 const KEY = process.env.YTDLP_KEY;
 
 export class YtdlpApiError extends Error {
@@ -14,10 +14,6 @@ export class YtdlpApiError extends Error {
     this.name = "YtdlpApiError";
     this.status = status;
   }
-}
-
-function requireKey() {
-  if (!KEY?.trim()) throw new YtdlpApiError(401, "YTDLP_KEY غير مضبوط");
 }
 
 function filenameFromDisposition(value) {
@@ -32,11 +28,11 @@ async function parseError(response) {
 }
 
 export async function downloadMedia(url, { type = "video", q = 720, dir = os.tmpdir(), filename, onProgress, signal } = {}) {
-  requireKey();
   if (!url) throw new YtdlpApiError(400, "الرابط مطلوب");
   const query = new URLSearchParams({ url: String(url), type, q: String(q) });
+  const headers = KEY?.trim() ? { "X-API-Key": KEY.trim() } : {};
   const response = await fetch(`${BASE}/stream?${query}`, {
-    headers: { "X-API-Key": KEY },
+    headers,
     signal: signal || AbortSignal.timeout(90_000),
   });
   if (!response.ok) throw new YtdlpApiError(response.status, await parseError(response));
@@ -66,9 +62,10 @@ export async function downloadMedia(url, { type = "video", q = 720, dir = os.tmp
 }
 
 export async function info(url) {
-  requireKey();
+  if (!url) throw new YtdlpApiError(400, "الرابط مطلوب");
+  const headers = KEY?.trim() ? { "X-API-Key": KEY.trim() } : {};
   const response = await fetch(`${BASE}/info?url=${encodeURIComponent(url)}`, {
-    headers: { "X-API-Key": KEY },
+    headers,
     signal: AbortSignal.timeout(90_000),
   });
   if (!response.ok) throw new YtdlpApiError(response.status, await parseError(response));
