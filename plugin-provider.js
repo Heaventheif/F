@@ -1,6 +1,6 @@
 /**
  * @file plugin-provider.js
- * @description مزوّد البلاجينات المركزي — مسارات مُصحَّحة لتطابق البنية الفعلية.
+ * @description مزوّد البلاجينات المركزي — مسارات مطابقة للبنية الفعلية.
  *
  * @typedef {{
  *   name:        string,
@@ -12,7 +12,7 @@
  * }} XxPlugin
  */
 
-// ── BUG-02 FIX: مسارات LAZY_REGISTRY مُصحَّحة لتطابق src/cmds/ الفعلي ────────
+// ── مسارات LAZY_REGISTRY المطابقة للملفات الموجودة ───────────────────────
 /** @type {Array<[string, () => Promise<{$plugin: XxPlugin}>]>} */
 const LAZY_REGISTRY = [
   // ── الأوامر (src/cmds/) ──────────────────────────────────────────────────
@@ -21,24 +21,22 @@ const LAZY_REGISTRY = [
   ['ai',         () => import('./src/cmds/gptx.js')],
   ['ai',         () => import('./src/cmds/groq.js')],
   ['ai',         () => import('./src/cmds/draw.js')],
-  ['ai',         () => import('./src/cmds/stt.js')],
   ['ai',         () => import('./src/cmds/tr.js')],
   ['ai',         () => import('./src/cmds/tts.js')],
   ['fun',        () => import('./src/cmds/animal.js')],
   ['fun',        () => import('./src/cmds/chess.js')],
+  ['fun',        () => import('./src/cmds/fact.js')],
   ['fun',        () => import('./src/cmds/comic.js')],
   ['fun',        () => import('./src/cmds/manga.js')],
+  ['fun',        () => import('./src/cmds/mangalik.js')],
   ['fun',        () => import('./src/cmds/novel.js')],
   ['fun',        () => import('./src/cmds/quran.js')],
   ['fun',        () => import('./src/cmds/slap.js')],
-  ['fun',        () => import('./src/cmds/rankup.js')],
   ['media',      () => import('./src/cmds/autodl.js')],
   ['media',      () => import('./src/cmds/canva.js')],
-  ['media',      () => import('./src/cmds/brat.js')],
   ['media',      () => import('./src/cmds/pin.js')],
   ['media',      () => import('./src/cmds/random.js')],
   ['media',      () => import('./src/cmds/song.js')],
-  ['media',      () => import('./src/cmds/sub.js')],
   ['media',      () => import('./src/cmds/up.js')],
   ['media',      () => import('./src/cmds/yt.js')],
   ['media',      () => import('./src/cmds/img.js')],

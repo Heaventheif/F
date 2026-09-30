@@ -11,10 +11,10 @@ Supported command mappings:
 | Command | Endpoint | Request shape | Success response |
 |---|---|---|---|
 | `canva` profile designs | `GET /brick-wall`, `/city-billboard`, `/night-city`, `/wanted-poster`, `/rainbow`, `/beautiful`, `/calendar` | `?userid=<5–20 digit UID>` | image bytes, usually `image/png` |
-| `canva brat` / `brat` | `GET /brat` | `?text=<up to 180 chars>` | `image/png` |
+| `canva brat` | `GET /brat` | `?text=<up to 180 chars>` | `image/png` |
 | `slap` | `GET /slapv2` | `?one=<UID>&two=<UID>` | image bytes; may fail upstream |
 | `slap` fallback | `GET /slap` or `/spank` | `?batman=<UID>&superman=<UID>` or `?uid1=<UID>&uid2=<UID>` | image bytes; may fail upstream |
-| `rankup` | `GET /api/rankup` | `?uid=<UID>` | profile-overlay image/GIF when available |
+| `rankup` endpoint (not currently exposed as a bot command) | `GET /api/rankup` | `?uid=<UID>` | profile-overlay image/GIF when available |
 
 Authentication is **not documented**. The client sends no credential by default and supports an optional `BETADASH_API_KEY` only if the provider later documents bearer authentication. Rate limits are also **not documented**; the bot therefore applies a conservative local limit (`BETADASH_RATE_LIMIT`, default 8 requests per 10 seconds), honors `Retry-After`, and retries transient failures with capped exponential backoff.
 
@@ -28,8 +28,6 @@ Authentication is **not documented**. The client sends no credential by default 
 - `slap @person` or reply to a message — generate an interaction canvas.
 - `slap slapv2 @person` — choose the first endpoint explicitly.
 - `slap list` — show the available interaction endpoints.
-- `brat <text>` — generate a text canvas directly.
-- `rankup` or `rankup @person` — generate a rank-up card.
 
 ## Reliability and cost controls
 
