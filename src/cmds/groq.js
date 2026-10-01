@@ -41,10 +41,6 @@ function detectAttachment(event) {
         att.image?.uri;
       if (url) return { kind: "image", url };
     }
-    if (type === "audio" || type === "voice_message") {
-      const url = att.url || att.audioUrl || att.uri;
-      if (url) return { kind: "audio", url };
-    }
     if (type === "video" || type === "video_inline") {
       const url = att.url || att.uri || att.previewUrl;
       if (url) return { kind: "video", url };
@@ -55,8 +51,6 @@ function detectAttachment(event) {
       if (!url) continue;
       if (["jpg","jpeg","png","gif","webp","bmp"].includes(ext))
         return { kind: "image", url };
-      if (["mp3","m4a","ogg","wav","flac","aac"].includes(ext))
-        return { kind: "audio", url };
       if (["mp4","mov","avi","mkv","webm"].includes(ext))
         return { kind: "video", url };
     }
@@ -124,7 +118,7 @@ async function handle(api, event, prompt, registerReply) {
   const attachment = detectAttachment(event);
   if (!prompt.trim() && !attachment) {
     return global.safeSend(api, 
-      "❓ اكتب سؤالك أو أرسل صورة/صوت/فيديو، وسأرد عليك بصوت 🔊!\n" +
+      "❓ اكتب سؤالك أو أرسل صورة/فيديو، وسأرد عليك بصوت 🔊!\n" +
       "مثال: .groq كم ناتج 1+8؟\n" +
       ".groq بحث <سؤالك> — بحث مباشر في الإنترنت\n" +
       ".groq مسح — لمسح ذاكرة المجموعة",
@@ -137,7 +131,7 @@ async function handle(api, event, prompt, registerReply) {
     const sent = await new Promise((resolve, reject) =>
       global.safeSend(api, 
         attachment
-          ? `⏳ جاري تحليل ${attachment.kind === "image" ? "الصورة 🖼️" : attachment.kind === "audio" ? "الصوت 🎵" : "الفيديو 🎬"}...`
+          ? `⏳ جاري تحليل ${attachment.kind === "image" ? "الصورة 🖼️" : "الفيديو 🎬"}...`
           : webSearch ? "⏳ جاري البحث في الإنترنت 🌐..." : "⏳ جاري توليد الرد الصوتي 🔊...",
         threadID,
         (err, info) => err ? reject(err) : resolve(info),
@@ -150,8 +144,8 @@ async function handle(api, event, prompt, registerReply) {
     try { if (statusMsgId) await api.editMessage(text, statusMsgId); } catch (_) {}
   };
   const ctx = await loadCtx(sessionKey);
-  const displayPrompt = prompt.trim() || (attachment?.kind === "audio" ? "فرّغ هذا الصوت" : attachment?.kind === "video" ? "حلل هذا الفيديو" : "وصف هذه الصورة");
-  const attPrefix = attachment ? `[${attachment.kind === "image" ? "صورة" : attachment.kind === "audio" ? "صوت" : "فيديو"}] ` : "";
+  const displayPrompt = prompt.trim() || (attachment?.kind === "video" ? "حلل هذا الفيديو" : "وصف هذه الصورة");
+  const attPrefix = attachment ? `[${attachment.kind === "image" ? "صورة" : "فيديو"}] ` : "";
   const userContent = formatGroupTurn(senderName, `${attPrefix}${displayPrompt}`);
   let userMsg;
   let rootAttachment = null;
@@ -230,10 +224,10 @@ export default {
     countDown: 3,
     role: 0,
     category: "ذكاء اصطناعي",
-    description: "محادثة Groq جماعية بذاكرة threadID مشتركة؛ أي عضو يستطيع المتابعة ويُميّز كل دور باسمه، مع دعم الوسائط والصوت",
+    description: "محادثة Groq جماعية بذاكرة threadID مشتركة؛ أي عضو يستطيع المتابعة ويُميّز كل دور باسمه، مع دعم الصور والفيديو والصوت الناتج",
     usage: [
       "{pn}Ai4 <سؤالك> — يرد البوت برسالة صوتية 🔊",
-      "{pn}Ai4 + صورة/صوت/فيديو مرفق — تحليل الوسائط والرد بصوت",
+      "{pn}Ai4 + صورة/فيديو مرفق — تحليل الوسائط والرد بصوت",
       "{pn}Ai4 بحث <سؤالك> — بحث مباشر في الإنترنت مع Groq Browser Search",
       "{pn}Ai4 مسح — مسح ذاكرة المحادثة الجماعية",
       "يمكن لأي عضو الرد على إجابة البوت لمواصلة نقاش المجموعة",
