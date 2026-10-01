@@ -19,7 +19,7 @@ async function fetchTTS(text, voice) {
   );
   if (!data?.audio_base64) {
     const error = new Error(data?.error || "استجابة فارغة");
-    error.response = { status, data };
+    error.response = { status: 502, data };
     throw error;
   }
   return data;

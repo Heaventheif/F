@@ -64,11 +64,12 @@ function detectAttachment(event) {
   return null;
 }
 // Call backend service with messages and root-level attachment support
-async function callHF(messages, attachment, prompt, wantsVoice) {
+async function callHF(messages, attachment, prompt, wantsVoice, webSearch = false) {
   const body = { messages };
   if (attachment) body.attachment = attachment;
   if (prompt !== undefined && prompt !== null) body.prompt = prompt;
   if (wantsVoice) body.tts = true;
+  if (webSearch) body.web_search = true;
   const { data } = await http.post(
     `${getHfBase()}/groq`,
     body,
@@ -117,11 +118,15 @@ async function handle(api, event, prompt, registerReply) {
     return global.safeSend(api, "🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
   }
   const wantsVoice = true;
+  const searchPrefix = /^(?:بحث|ابحث|search|web)\s*[:：-]?\s*/i;
+  const webSearch = searchPrefix.test(prompt);
+  if (webSearch) prompt = prompt.replace(searchPrefix, "").trim();
   const attachment = detectAttachment(event);
   if (!prompt.trim() && !attachment) {
     return global.safeSend(api, 
       "❓ اكتب سؤالك أو أرسل صورة/صوت/فيديو، وسأرد عليك بصوت 🔊!\n" +
       "مثال: .groq كم ناتج 1+8؟\n" +
+      ".groq بحث <سؤالك> — بحث مباشر في الإنترنت\n" +
       ".groq مسح — لمسح ذاكرة المجموعة",
       threadID, null, messageID
     );
@@ -133,7 +138,7 @@ async function handle(api, event, prompt, registerReply) {
       global.safeSend(api, 
         attachment
           ? `⏳ جاري تحليل ${attachment.kind === "image" ? "الصورة 🖼️" : attachment.kind === "audio" ? "الصوت 🎵" : "الفيديو 🎬"}...`
-          : "⏳ جاري توليد الرد الصوتي 🔊...",
+          : webSearch ? "⏳ جاري البحث في الإنترنت 🌐..." : "⏳ جاري توليد الرد الصوتي 🔊...",
         threadID,
         (err, info) => err ? reject(err) : resolve(info),
         messageID
@@ -179,7 +184,7 @@ async function handle(api, event, prompt, registerReply) {
   const messages = [...ctx, userMsg];
   let result;
   try {
-    result = await callHF(messages, rootAttachment, userContent, wantsVoice);
+    result = await callHF(messages, rootAttachment, userContent, wantsVoice, webSearch);
   } catch (e) {
     console.error("[GROQ→HF]", e.response?.status, e.message?.substring(0, 80));
     console.error("[groq:callHF]", e.message);
@@ -229,6 +234,7 @@ export default {
     usage: [
       "{pn}Ai4 <سؤالك> — يرد البوت برسالة صوتية 🔊",
       "{pn}Ai4 + صورة/صوت/فيديو مرفق — تحليل الوسائط والرد بصوت",
+      "{pn}Ai4 بحث <سؤالك> — بحث مباشر في الإنترنت مع Groq Browser Search",
       "{pn}Ai4 مسح — مسح ذاكرة المحادثة الجماعية",
       "يمكن لأي عضو الرد على إجابة البوت لمواصلة نقاش المجموعة",
     ],
