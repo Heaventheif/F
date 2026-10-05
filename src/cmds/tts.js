@@ -33,14 +33,15 @@ export default {
   config: {
     name: "tts",
     aliases: ["قول"],
-    version: "2.0.0",
+    version: "3.0.0",
     role: 0,
     countDown: 8,
     category: "ذكاء اصطناعي",
-    description: "تحويل النص العربي إلى صوت محلي عبر Piper TTS",
+    description: "تحويل النص العربي عبر Groq Orpheus، مع Piper كاحتياطي تلقائي",
     usage: [
-      "{pn}tts <نص عربي> — يحوّل النص العربي إلى صوت Piper",
-      "{pn}tts voices — يعرض صوت Piper العربي المتاح",
+      "{pn}tts <نص عربي> — Groq Orpheus Arabic Saudi، ثم Piper عند الفشل",
+      "{pn}tts <voice-id> | <نص> — يختار صوت Groq",
+      "{pn}tts voices — يعرض أصوات Groq وصوت Piper الاحتياطي",
     ],
   },
   onStart: async ({ api, event, args, message }) => {
@@ -49,8 +50,9 @@ export default {
     if (!raw) {
       return message.reply(
         "🗣️ تحويل النص العربي إلى صوت\n\n" +
-        ".tts <نص عربي> — صوت Piper العربي\n" +
-        ".tts voices — عرض الصوت العربي المتاح"
+        ".tts <نص عربي> — Groq Orpheus Arabic Saudi\n" +
+        ".tts <voice-id> | <نص> — يختار صوت Groq\n" +
+        ".tts voices — عرض الأصوات وPiper الاحتياطي"
       );
     }
     if (raw.toLowerCase() === "voices" || raw === "أصوات") {
@@ -59,17 +61,23 @@ export default {
           `${getHfBase()}/gemini/tts/voices`,
           { timeout: 15000, headers: { "X-Internal-Token": getInternalToken() } }
         );
-        const voices = Array.isArray(data.piper_voices) ? data.piper_voices : [];
-        if (!voices.length) throw new Error("قائمة أصوات Piper فارغة");
-        const list = voices.map((name) => `• ${name}`).join("\n");
+        const groqVoices = Array.isArray(data.groq_voices) ? data.groq_voices : [];
+        const piperVoices = Array.isArray(data.piper_voices) ? data.piper_voices : [];
+        if (!groqVoices.length && !piperVoices.length) throw new Error("قائمة أصوات TTS فارغة");
+        const groqList = groqVoices.length
+          ? `Groq الأساسي:\n${groqVoices.map((name) => `• ${name}`).join("\n")}`
+          : "Groq الأساسي: غير متاح حالياً";
+        const piperList = piperVoices.length
+          ? `Piper الاحتياطي:\n${piperVoices.map((name) => `• ${name}`).join("\n")}`
+          : "Piper الاحتياطي: غير متاح";
         return global.safeSend(
           api,
-          `🎙️ أصوات Piper العربية (${voices.length})\nالصوت الافتراضي: ${data.default_voice || voices[0]}\n${list}`,
+          `🎙️ مزودو TTS العربي\n${groqList}\n\n${piperList}\nالصوت الافتراضي: ${data.default_voice || groqVoices[0] || piperVoices[0]}`,
           threadID, null, messageID
         );
       } catch (e) {
         console.error("[tts:voices]", e.message);
-        return message.reply("❌ تعذّر جلب قائمة أصوات Piper، حاول لاحقاً.");
+        return message.reply("❌ تعذّر جلب قائمة أصوات TTS، حاول لاحقاً.");
       }
     }
 
@@ -81,7 +89,7 @@ export default {
       text = raw.slice(sepIdx + 1).trim();
     }
     if (!text) return message.reply("❌ النص فارغ.");
-    if (!hasArabicText(text)) return message.reply("❌ Piper TTS في هذا الأمر يدعم النص العربي فقط.");
+    if (!hasArabicText(text)) return message.reply("❌ خدمة TTS في هذا الأمر تدعم النص العربي فقط.");
 
     let tmpFile;
     try {
@@ -91,16 +99,16 @@ export default {
       await fs.writeFile(tmpFile, buffer);
       await global.safeSend(
         api,
-        { body: `🎙️ ${usedVoice || "Piper Arabic"}`, attachment: fs.createReadStream(tmpFile) },
+        { body: `🎙️ ${usedVoice || "Groq Orpheus Arabic"}`, attachment: fs.createReadStream(tmpFile) },
         threadID, null, messageID
       );
     } catch (e) {
       const status = e.response?.status;
-      console.error("[TTS→Piper]", status, e.message?.substring(0, 200));
+      console.error("[TTS→Groq→Piper]", status, e.message?.substring(0, 200));
       console.error("[tts:fetchTTS]", e.message);
       const details = e.response?.data?.error || e.message || "خطأ غير معروف";
       const retryHint = [500, 502, 503, 504].includes(status)
-        ? " أعادت الخدمة المحاولة تلقائياً؛ أعد المحاولة بعد قليل إذا استمر العطل."
+        ? " جُرّب Piper الاحتياطي تلقائياً؛ أعد المحاولة بعد قليل إذا استمر العطل."
         : "";
       await message.reply(`❌ فشل توليد الصوت${status ? ` (HTTP ${status})` : ""}: ${String(details).slice(0, 300)}${retryHint}`);
     } finally {
