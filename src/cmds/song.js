@@ -3,7 +3,6 @@ import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
 import os from "os";
 import path from "path";
-import { downloadMedia } from "../utils/mediaApi.js";
 const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -96,67 +95,52 @@ async function resolveStreamUrl(transcodingUrl, trackAuthorization, forceRefresh
   return url;
 }
 async function streamTrack(track) {
-    const url = track?.permalink_url;
-    if (!url) throw new Error("لا يوجد رابط SoundCloud للمقطع");
-
-    // جرّب API أولاً؛ بعض مقاطع SoundCloud لا تعرض صيغاً متوافقة عبر yt-dlp.
-    try {
-        const result = await downloadMedia(url, { type: "audio" });
+  const transcodings = track.media?.transcodings ?? [];
+  if (!transcodings.length) throw new Error("لا يوجد بث متاح لهذا المقطع");
+  const ordered = [
+    ...transcodings.filter(t => !t.snipped && t.format?.protocol === "progressive"),
+    ...transcodings.filter(t => !t.snipped && t.format?.protocol === "hls"),
+    ...transcodings.filter(t =>  t.snipped && t.format?.protocol === "progressive"),
+    ...transcodings.filter(t =>  t.snipped && t.format?.protocol === "hls"),
+    ...transcodings,
+  ];
+  const seen = new Set();
+  const candidates = ordered.filter(t => t.url && !seen.has(t.url) && seen.add(t.url));
+  const trackAuth = track.track_authorization ?? "";
+  const lastError = [];
+  for (const pick of candidates) {
+    for (const forceRefresh of [false, true]) {
+      try {
+        const streamUrl = await resolveStreamUrl(pick.url, trackAuth, forceRefresh);
+        const filePath = path.join(os.tmpdir(), `sc_${Date.now()}.mp3`);
+        const dlRes = await http.get(streamUrl, {
+          responseType: "stream",
+          headers:      BROWSER_HEADERS,
+          timeout:      60000,
+        });
+        await new Promise((resolve, reject) => {
+          const writer = fs.createWriteStream(filePath);
+          dlRes.data.pipe(writer);
+          writer.on("finish", resolve);
+          writer.on("error", reject);
+        });
+        const size = (await fs.stat(filePath)).size;
+        if (!size) { await cleanTemp(filePath); throw new Error("ملف الصوت فارغ"); }
         return {
-            filePath: result.filePath,
-            title: track.title || result.title || "بدون عنوان",
-            artist: track.publisher_metadata?.artist || track.user?.username || "",
-            durationMs: track.full_duration || track.duration || 0,
+          filePath,
+          title:      track.title || "بدون عنوان",
+          artist:     track.publisher_metadata?.artist || track.user?.username || "",
+          durationMs: track.full_duration || track.duration || 0,
+          isSnipped:  !!pick.snipped,
         };
-    } catch (apiError) {
-        console.warn(`[song] YTDLP API failed (${apiError.status ?? 0}); trying SoundCloud transcoding`);
+      } catch (err) {
+        const is404 = err?.response?.status === 404 || err?.response?.status === 401;
+        lastError.push(`${pick.format?.protocol}(refresh=${forceRefresh}): ${err.message}`);
+        if (!is404) break; 
+      }
     }
-
-    // احتياط SoundCloud الأصلي باستخدام transcoding endpoints.
-    const transcodings = track.media?.transcodings ?? [];
-    if (!transcodings.length) throw new Error("لا يوجد بث متاح لهذا المقطع عبر API أو SoundCloud");
-    const ordered = [
-        ...transcodings.filter(t => !t.snipped && t.format?.protocol === "progressive"),
-        ...transcodings.filter(t => !t.snipped && t.format?.protocol === "hls"),
-        ...transcodings.filter(t => t.snipped && t.format?.protocol === "progressive"),
-        ...transcodings.filter(t => t.snipped && t.format?.protocol === "hls"),
-        ...transcodings
-    ];
-    const seen = new Set();
-    const candidates = ordered.filter(t => t.url && !seen.has(t.url) && seen.add(t.url));
-    const errors = [];
-    for (const pick of candidates) {
-        for (const refresh of [false, true]) {
-            let filePath;
-            try {
-                const streamUrl = await resolveStreamUrl(pick.url, track.track_authorization ?? "", refresh);
-                filePath = path.join(os.tmpdir(), `sc_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`);
-                const response = await http.get(streamUrl, { responseType: "stream", headers: BROWSER_HEADERS, timeout: 60000 });
-                await new Promise((resolve, reject) => {
-                    const writer = fs.createWriteStream(filePath);
-                    response.data.pipe(writer);
-                    writer.on("finish", resolve);
-                    writer.on("error", reject);
-                    response.data.on("error", reject);
-                });
-                const size = (await fs.stat(filePath)).size;
-                if (!size) throw new Error("ملف الصوت فارغ");
-                return {
-                    filePath,
-                    title: track.title || "بدون عنوان",
-                    artist: track.publisher_metadata?.artist || track.user?.username || "",
-                    durationMs: track.full_duration || track.duration || 0,
-                    isSnipped: !!pick.snipped
-                };
-            } catch (err) {
-                if (filePath) await cleanTemp(filePath);
-                errors.push(`${pick.format?.protocol || "stream"}: ${err.message}`);
-                const status = err?.response?.status;
-                if (status !== 401 && status !== 404) break;
-            }
-        }
-    }
-    throw new Error("فشل تشغيل المقطع عبر SoundCloud: " + errors.slice(-3).join(" | "));
+  }
+  throw new Error("فشل تشغيل المقطع: " + lastError.slice(-3).join(" | "));
 }
 function fmtDuration(ms) {
   if (!ms) return "";
