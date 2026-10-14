@@ -109,10 +109,4 @@ export default {
   }
 };
 
-export const $plugin = {
-  name: "xx-commands-media-autodl",
-  meta: { category: "command-media", path: "src/cmds/autodl.js" },
-  setup(_ctx) {}
-};
-
 export { extractUrl, extractUrlFromEvent, parseDownloadType, downloadAndSend };

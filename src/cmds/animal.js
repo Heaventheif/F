@@ -61,13 +61,3 @@ export default {
     return sendFact(api, threadID, messageID, Math.random() < 0.5 ? "cat" : "dog");
   }
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-fun-animal',
-  meta: { category: 'command-fun', path: 'src/commands/fun/animal.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

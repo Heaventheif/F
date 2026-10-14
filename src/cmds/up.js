@@ -255,13 +255,3 @@ export default {
         message.reply(L.join("\n"));
     }
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-media-up',
-  meta: { category: 'command-media', path: 'src/commands/media/up.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

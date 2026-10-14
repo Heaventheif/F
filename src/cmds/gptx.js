@@ -428,13 +428,3 @@ export default {
     }
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-gptx',
-  meta: { category: 'command-ai', path: 'src/commands/ai/gptx.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

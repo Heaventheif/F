@@ -380,10 +380,3 @@ export default {
     }
   },
 };
-
-/** @type {import('../../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: "xx-commands-fun-mangalik",
-  meta: { category: "command-fun", path: "src/cmds/mangalik.js" },
-  setup(_ctx) {},
-};

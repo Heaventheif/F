@@ -29,4 +29,3 @@ export default {
     } catch (error) { console.error("[SLAP]", error.details || error.message); await message.reply(`❌ ${formatProviderError(error)}`); }
   },
 };
-export const $plugin = { name: "xx-commands-fun-slap", meta: { category: "command-fun", path: "src/commands/fun/slap.js" }, setup() {} };

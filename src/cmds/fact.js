@@ -22,10 +22,3 @@ export default {
     }
   },
 };
-
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: "xx-commands-fun-fact",
-  meta: { category: "command-fun", path: "src/commands/fun/fact.js" },
-  setup(_ctx) {},
-};

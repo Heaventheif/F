@@ -328,13 +328,3 @@ export default {
     }
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-draw',
-  meta: { category: 'command-ai', path: 'src/commands/ai/draw.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

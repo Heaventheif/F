@@ -50,6 +50,10 @@ services:
         value: "1000"
       - key: FCA_RATE_DEFAULT
         value: "1000"
+      # فاصل اختياري (مللي ثانية) بين رفعتي وسائط في نفس المجموعة.
+      # 0 = أسرع. إن تكررت رسالة "returned no metadata/ids" جرّب 400.
+      - key: MEDIA_GAP_MS
+        value: "0"
       # yt-dlp API endpoint and secret key
       - key: YTDLP_URL
         value: https://ytdlp-api-gukc.onrender.com

@@ -230,13 +230,3 @@ export default {
     }
   }
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-media-random',
-  meta: { category: 'command-media', path: 'src/commands/media/random.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

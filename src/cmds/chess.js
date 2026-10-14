@@ -465,13 +465,3 @@ ${x}: ${c}
 };export {
   ee as default
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-fun-chess',
-  meta: { category: 'command-fun', path: 'src/commands/fun/chess.js' },
-  setup(_ctx) {
-    // provides: ee
-  },
-};

@@ -241,13 +241,3 @@ export default {
     await handle(api, event, event.body?.trim() || "", message?.registerReply);
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-groq',
-  meta: { category: 'command-ai', path: 'src/commands/ai/groq.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

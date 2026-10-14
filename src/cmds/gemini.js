@@ -219,13 +219,3 @@ export default {
     await handle(api, event, prompt, message?.registerReply);
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-gemini',
-  meta: { category: 'command-ai', path: 'src/commands/ai/gemini.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

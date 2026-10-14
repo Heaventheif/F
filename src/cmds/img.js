@@ -96,13 +96,3 @@ export default {
     }
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-imagine',
-  meta: { category: 'command-ai', path: 'src/commands/ai/imagine.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

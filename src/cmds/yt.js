@@ -3,34 +3,35 @@ import fs from "fs-extra";
 import { searchWithFallback, downloadWithFallback, cleanTemp } from "../utils/ytProviders.js";
 import { buildListText, attachReactionPicker } from "../utils/reactionPicker.js";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
+
+const HELP =
+  "📥 يوتيوب دونلودر\n\n" +
+  "🎵 yt <اسم>          — تحميل مباشر (MP3)\n" +
+  "🎬 yt mp4 <اسم>      — تحميل مباشر (MP4)\n" +
+  "📋 yt s <اسم>        — قائمة نتائج (MP3)\n" +
+  "📋 yt s mp4 <اسم>    — قائمة نتائج (MP4)\n" +
+  "🔗 yt <رابط>         — تحميل مباشر\n\n" +
+  "🎚 الجودة: صوت 128kbps | فيديو 360p";
+
 async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsgId = null) {
   let filePath = null;
   let partPaths = [];
   try {
-    const dl = await downloadWithFallback(ytUrl, wantMp4);
-    filePath = dl.filePath;
-    const fileSize = (await fs.stat(filePath)).size;
-    const files = NEEDS_SPLIT(fileSize)
+    ({ filePath } = await downloadWithFallback(ytUrl, wantMp4));
+    const { size } = await fs.stat(filePath);
+    const files = NEEDS_SPLIT(size)
       ? (partPaths = await splitFile(filePath, wantMp4 ? "mp4" : "mp3"))
       : [filePath];
-    for (let i = 0; i < files.length; i++) {
-      await new Promise((res, rej) =>
-        (global.mediaSend || global.safeSend)(api,
-          { attachment: fs.createReadStream(files[i]) },
-          threadID,
-          err => err ? rej(err) : res(),
-          messageID
-        )
-      );
-    }
+    for (const file of files) await global.mediaSendFile(api, file, threadID, messageID);
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-  } catch (err) {
+  } catch (_) {
     global.safeSend(api, "❌ تعذّر تحميل الملف.", threadID, null, messageID);
   } finally {
     if (partPaths.length) await cleanupParts(partPaths);
     await cleanTemp(filePath);
   }
 }
+
 export default {
   config: {
     name: "yt",
@@ -49,61 +50,45 @@ export default {
       "{pn}يوتيوب mp4 <رابط> — تحميل مباشر MP4",
     ],
   },
+
   onStart: async ({ api, message, args, event }) => {
     const { threadID, messageID } = event;
-    if (!args[0]) return message.reply(
-      "📥 يوتيوب دونلودر\n\n" +
-      "🎵 yt <اسم>          — تحميل مباشر (MP3)\n" +
-      "🎬 yt mp4 <اسم>      — تحميل مباشر (MP4)\n" +
-      "📋 yt s <اسم>        — قائمة نتائج (MP3)\n" +
-      "📋 yt s mp4 <اسم>    — قائمة نتائج (MP4)\n" +
-      "🔗 yt <رابط>         — تحميل مباشر\n\n" +
-      "🎚 الجودة: صوت 128kbps | فيديو 360p"
-    );
-    let remaining = [...args];
-    const showList = remaining[0]?.toLowerCase() === "s";
-    if (showList) remaining = remaining.slice(1);
-    const wantMp4 = remaining[0]?.toLowerCase() === "mp4";
-    if (wantMp4) remaining = remaining.slice(1);
-    const query = remaining.join(" ").trim();
+    if (!args[0]) return message.reply(HELP);
+
+    // الكلمات المفتاحية اختيارية وبهذا الترتيب: s ثم mp4
+    const rest = [...args];
+    const takeFlag = (word) => rest[0]?.toLowerCase() === word && !!rest.shift();
+    const showList = takeFlag("s");
+    const wantMp4 = takeFlag("mp4");
+    const query = rest.join(" ").trim();
     if (!query) return message.reply("❌ أرسل اسم الأغنية أو الرابط.");
-    const isUrl = /^https?:\/\//i.test(query);
-    if (isUrl) return await downloadAndSend(api, threadID, messageID, query, wantMp4);
-    if (!showList) {
-      try {
-        const results = await searchWithFallback(query, 1);
-        if (!results?.[0]?.url) return global.safeSend(api, "غير موجود.", threadID, null, messageID);
-        return await downloadAndSend(api, threadID, messageID, results[0].url, wantMp4);
-      } catch (e) {
-        return global.safeSend(api, "غير موجود.", threadID, null, messageID);
-      }
+
+    if (/^https?:\/\//i.test(query)) {
+      return downloadAndSend(api, threadID, messageID, query, wantMp4);
     }
+
     try {
-      const results = await searchWithFallback(query, 10);
-      const list = results.slice(0, 10);
+      if (!showList) {
+        const [first] = await searchWithFallback(query, 1);
+        if (!first?.url) throw new Error("no results");
+        return await downloadAndSend(api, threadID, messageID, first.url, wantMp4);
+      }
+
+      const list = (await searchWithFallback(query, 10)).slice(0, 10);
       const sent = await new Promise((res, rej) =>
         global.safeSend(api, buildListText(list, wantMp4), threadID,
-          (err, info) => err ? rej(err) : res(info), messageID)
+          (err, info) => (err ? rej(err) : res(info)), messageID)
       );
       attachReactionPicker({
         sentMessageID: sent?.messageID,
         authorID: event.senderID,
         list,
-        onPick: (chosen, wantMp4Alt) =>
-          downloadAndSend(api, threadID, messageID, chosen.url, wantMp4Alt, sent.messageID),
+        // الإيموجي الثاني في كل زوج = MP4، بغض النظر عن الكلمة المفتاحية
+        onPick: (chosen, asMp4) =>
+          downloadAndSend(api, threadID, messageID, chosen.url, asMp4, sent.messageID),
       });
-    } catch (e) {
+    } catch (_) {
       global.safeSend(api, "غير موجود.", threadID, null, messageID);
     }
-  },
-};
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-media-yt',
-  meta: { category: 'command-media', path: 'src/commands/media/yt.js' },
-  setup(_ctx) {
-    // see module exports
   },
 };

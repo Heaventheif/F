@@ -552,13 +552,3 @@ export default {
     }
   }
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-fun-novel',
-  meta: { category: 'command-fun', path: 'src/commands/fun/novel.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

@@ -116,13 +116,3 @@ export default {
     }
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-ai-tts',
-  meta: { category: 'command-ai', path: 'src/commands/ai/tts.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

@@ -183,13 +183,3 @@ async function handleAdd(api, event, args) {
 
   api.sendMessage(results.join("\n"), threadID, null, messageID);
 }
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-admin-user',
-  meta: { category: 'command-admin', path: 'src/cmds/user.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

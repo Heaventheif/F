@@ -1,4 +1,5 @@
 "use strict";
+import fs from "node:fs";
 // ── Conservative send pacing ─────────────────────────────────────
 // Serialize per-thread sends and leave room for transient platform limits.
 // This is a reliability guard, not a mechanism to evade platform enforcement.
@@ -116,22 +117,72 @@ function prioritySend(api, body, threadID, callback, messageID) {
   return resultPromise;
 }
 // ── Media send lane ──────────────────────────────────────────────
-// إرسال الوسائط فوراً: بلا فاصل زمني ولا jitter ولا انتظار في بوابة الخيط،
-// فلا يتأخر الملف خلف رسائل أخرى ولا تتأخر الرسائل خلف رفع الملف.
-// الإبقاء الوحيد: عند 429 نُبطئ بوابة النص فقط حتى لا تتراكم الأخطاء.
+// إرسال الوسائط فوراً بلا انتظار في بوابة الخيط، فلا يتأخر الملف خلف رسائل
+// أخرى ولا تتأخر الرسائل خلف رفع الملف.
+//  - النتيجة تأتي من الـ callback فقط؛ الـ Promise المُرجَع من المكتبة نستعمله للأخطاء.
+//  - مهلة الإرسال تُحوَّل إلى callback(err) ولا تتحول إلى unhandledRejection.
+//  - MEDIA_GAP_MS (افتراضي 0) فاصل اختياري بين رفعتين في نفس المجموعة.
+const MEDIA_GAP_MS = Math.max(0, Number.parseInt(process.env.MEDIA_GAP_MS || "", 10) || 0);
+
 function mediaSend(api, body, threadID, callback, messageID) {
   const rawApi = api.__rawApi || api;
-  return sendWithTimeout(() => messageID !== undefined
-    ? rawApi.sendMessage(body, threadID, callback, messageID)
-    : rawApi.sendMessage(body, threadID, callback)
-  ).catch(sendErr => {
-    const errMsg = String(sendErr?.message ?? sendErr ?? "");
-    if (/429|405|rate.?limit|too many/i.test(errMsg)) {
-      _gate(String(threadID), PRIORITY_SEND_GAP_MS).lastSendAt = Date.now() + 30_000;
-      console.warn("[MEDIA_SEND] ⚠️ rate-limited");
-    }
-    throw sendErr;
+  const gate   = _gate(String(threadID), PRIORITY_SEND_GAP_MS);
+  let wait = 0;
+  if (MEDIA_GAP_MS > 0) {
+    const startAt = Math.max(Date.now(), gate.mediaNextAt || 0);
+    gate.mediaNextAt = startAt + MEDIA_GAP_MS;
+    wait = startAt - Date.now();
+  }
+  const p = new Promise((resolve, reject) => {
+    let done = false;
+    let timer = null;
+    const finish = (err, info) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (err && /429|405|rate.?limit|too many/i.test(String(err?.message ?? err))) {
+        gate.lastSendAt = Date.now() + 30_000;
+        console.warn("[MEDIA_SEND] ⚠️ rate-limited");
+      }
+      if (typeof callback === "function") { try { callback(err, info); } catch (_) {} }
+      err ? reject(err) : resolve(info);
+    };
+    timer = setTimeout(() => {
+      const e = new Error(`Facebook sendMessage timed out after ${SEND_TIMEOUT_MS}ms`);
+      e.isTimeout = true;
+      finish(e);
+    }, SEND_TIMEOUT_MS);
+    const run = () => {
+      if (done) return;
+      try {
+        const ret = messageID !== undefined
+          ? rawApi.sendMessage(body, threadID, finish, messageID)
+          : rawApi.sendMessage(body, threadID, finish);
+        if (ret && typeof ret.then === "function") ret.then(() => {}, err => finish(err));
+      } catch (e) { finish(e); }
+    };
+    if (wait > 0) setTimeout(run, wait); else run();
   });
+  p.catch(() => {}); // الاستهلاك عبر callback؛ لا نريد unhandledRejection
+  return p;
+}
+
+// إرسال ملف مع إعادة محاولة واحدة عند فشل الرفع (مثل: returned no metadata/ids).
+// لا نعيد المحاولة عند المهلة (timeout) لتفادي إرسال الملف مرتين إن كان قد وصل.
+async function mediaSendFile(api, filePath, threadID, messageID, attempts = 2) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await mediaSend(api, { attachment: fs.createReadStream(filePath) }, threadID, undefined, messageID);
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (e?.isTimeout || i + 1 >= attempts) break;
+      console.warn(`[MEDIA_SEND] ⚠️ فشل الرفع (${String(e?.message ?? e).slice(0, 80)}) — إعادة محاولة`);
+      await new Promise(r => setTimeout(r, 700));
+    }
+  }
+  throw lastErr;
 }
 function cleanupIdleThreadGates() {
   const now     = Date.now();
@@ -154,6 +205,7 @@ function wrapApiForSafety(api) {
 global.safeSend              = gatedSend;
 global.prioritySend          = prioritySend;
 global.mediaSend             = mediaSend;
+global.mediaSendFile         = mediaSendFile;
 global.wrapApiForSafety      = wrapApiForSafety;
 global.cleanupIdleThreadGates = cleanupIdleThreadGates;
 
@@ -164,7 +216,7 @@ setInterval(() => {
   const removed = cleanupIdleThreadGates();
   if (removed > 0) console.log(`[SEND] 🧹 أُزيل ${removed} gate خامل من الذاكرة.`);
 }, 30 * 60 * 1000).unref();
-export { gatedSend, prioritySend, mediaSend, wrapApiForSafety, cleanupIdleThreadGates };
+export { gatedSend, prioritySend, mediaSend, mediaSendFile, wrapApiForSafety, cleanupIdleThreadGates };
 
 // ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */

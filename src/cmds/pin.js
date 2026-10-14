@@ -80,13 +80,3 @@ export default {
     }
   },
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-media-pin',
-  meta: { category: 'command-media', path: 'src/commands/media/pin.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

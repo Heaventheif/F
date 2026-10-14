@@ -168,12 +168,3 @@ export default {
     }
   },
 };
-
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: "xx-commands-general-help",
-  meta: { category: "command-general", path: "src/commands/general/help.js" },
-  setup(_ctx) {
-    // see module exports
-  },
-};

@@ -176,13 +176,3 @@ async function handleAdmin(api, event, args) {
 
   api.sendMessage(results.join("\n"), threadID, null, messageID);
 }
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-admin-group',
-  meta: { category: 'command-admin', path: 'src/cmds/group.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

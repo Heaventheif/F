@@ -34,4 +34,3 @@ export default {
   },
 };
 async function sendImage(api, event, result, label) { const file = path.join(os.tmpdir(), `canva_${Date.now()}.png`); try { await fs.writeFile(file, result.data); await global.safeSend(api, { body: label, attachment: fs.createReadStream(file) }, event.threadID, null, event.messageID); } finally { await fs.remove(file).catch(() => {}); } }
-export const $plugin = { name: "xx-commands-media-canva", meta: { category: "command-media", path: "src/commands/media/canva.js" }, setup() {} };

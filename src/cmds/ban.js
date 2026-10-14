@@ -101,10 +101,3 @@ export default {
     }
   },
 };
-
-/** @type {import('../../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: "xx-commands-admin-ban",
-  meta: { category: "command-admin", path: "src/cmds/ban.js" },
-  setup() {},
-};

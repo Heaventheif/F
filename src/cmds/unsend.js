@@ -53,13 +53,3 @@ export default {
     }
   }
 };
-
-// ─── Plugin Descriptor ──────────────────────────────────────────
-/** @type {import('../../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: 'xx-commands-admin-unsend',
-  meta: { category: 'command-admin', path: 'src/cmds/unsend.js' },
-  setup(_ctx) {
-    // see module exports
-  },
-};

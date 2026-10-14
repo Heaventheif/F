@@ -78,10 +78,3 @@ export default {
     }
   },
 };
-
-/** @type {import('../plugin-provider.js').XxPlugin} */
-export const $plugin = {
-  name: "xx-commands-ai-stt",
-  meta: { category: "command-ai", path: "src/commands/ai/stt.js" },
-  setup() {},
-};
