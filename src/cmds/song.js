@@ -3,6 +3,7 @@ import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
 import os from "os";
 import path from "path";
+import { randomUUID } from "node:crypto";
 const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -112,7 +113,7 @@ async function streamTrack(track) {
     for (const forceRefresh of [false, true]) {
       try {
         const streamUrl = await resolveStreamUrl(pick.url, trackAuth, forceRefresh);
-        const filePath = path.join(os.tmpdir(), `sc_${Date.now()}.mp3`);
+        const filePath = path.join(os.tmpdir(), `sc_${Date.now()}_${randomUUID()}.mp3`);
         const dlRes = await http.get(streamUrl, {
           responseType: "stream",
           headers:      BROWSER_HEADERS,
@@ -156,7 +157,7 @@ async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
     const result = await streamTrack(track);
     filePath = result.filePath;
     await new Promise((res, rej) =>
-      global.safeSend(api, 
+      (global.mediaSend || global.safeSend)(api,
         { attachment: fs.createReadStream(filePath) },
         threadID,
         err => err ? rej(err) : res(),
@@ -174,7 +175,7 @@ export default {
     aliases:     ["موسيقى"],
     version:     "1.0.0",
     role:        0,
-    countDown:   6,
+    countDown:   0,
     category: "وسائط وتحميل",
     description: "بحث وتشغيل مقاطع من SoundCloud — أضف s لعرض قائمة نتائج",
     usage: [

@@ -10,10 +10,7 @@
   "scripts": {
     "build": "bun install --production",
     "start": "bun --smol main.js",
-    "dev": "bun --watch main.js",
-    "test": "bun test test/",
-    "soak": "node scripts/soak.js",
-    "soak:72h": "node scripts/soak.js --hours=72"
+    "dev": "bun --watch main.js"
   },
   "overrides": {
     "cheerio": "^1.2.0"

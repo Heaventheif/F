@@ -36,8 +36,8 @@
   },
   "antiDetection": {
     "enabled": true,
-    "requestDelayMin": 300,
-    "requestDelayMax": 400,
+    "requestDelayMin": 0,
+    "requestDelayMax": 0,
     "userAgentPool": []
   }
 }

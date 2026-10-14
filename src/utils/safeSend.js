@@ -115,6 +115,24 @@ function prioritySend(api, body, threadID, callback, messageID) {
   gate.promise = resultPromise.catch(e => { console.error("[PRIORITY_SEND] خطأ:", e.message); });
   return resultPromise;
 }
+// ── Media send lane ──────────────────────────────────────────────
+// إرسال الوسائط فوراً: بلا فاصل زمني ولا jitter ولا انتظار في بوابة الخيط،
+// فلا يتأخر الملف خلف رسائل أخرى ولا تتأخر الرسائل خلف رفع الملف.
+// الإبقاء الوحيد: عند 429 نُبطئ بوابة النص فقط حتى لا تتراكم الأخطاء.
+function mediaSend(api, body, threadID, callback, messageID) {
+  const rawApi = api.__rawApi || api;
+  return sendWithTimeout(() => messageID !== undefined
+    ? rawApi.sendMessage(body, threadID, callback, messageID)
+    : rawApi.sendMessage(body, threadID, callback)
+  ).catch(sendErr => {
+    const errMsg = String(sendErr?.message ?? sendErr ?? "");
+    if (/429|405|rate.?limit|too many/i.test(errMsg)) {
+      _gate(String(threadID), PRIORITY_SEND_GAP_MS).lastSendAt = Date.now() + 30_000;
+      console.warn("[MEDIA_SEND] ⚠️ rate-limited");
+    }
+    throw sendErr;
+  });
+}
 function cleanupIdleThreadGates() {
   const now     = Date.now();
   let   removed = 0;
@@ -135,6 +153,7 @@ function wrapApiForSafety(api) {
 }
 global.safeSend              = gatedSend;
 global.prioritySend          = prioritySend;
+global.mediaSend             = mediaSend;
 global.wrapApiForSafety      = wrapApiForSafety;
 global.cleanupIdleThreadGates = cleanupIdleThreadGates;
 
@@ -145,7 +164,7 @@ setInterval(() => {
   const removed = cleanupIdleThreadGates();
   if (removed > 0) console.log(`[SEND] 🧹 أُزيل ${removed} gate خامل من الذاكرة.`);
 }, 30 * 60 * 1000).unref();
-export { gatedSend, prioritySend, wrapApiForSafety, cleanupIdleThreadGates };
+export { gatedSend, prioritySend, mediaSend, wrapApiForSafety, cleanupIdleThreadGates };
 
 // ─── Plugin Descriptor ──────────────────────────────────────────
 /** @type {import('../plugin-provider.js').XxPlugin} */

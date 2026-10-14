@@ -15,7 +15,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsg
       : [filePath];
     for (let i = 0; i < files.length; i++) {
       await new Promise((res, rej) =>
-        global.safeSend(api,
+        (global.mediaSend || global.safeSend)(api,
           { attachment: fs.createReadStream(files[i]) },
           threadID,
           err => err ? rej(err) : res(),
@@ -37,7 +37,7 @@ export default {
     aliases: ["يوتيوب"],
     version: "1.0.0",
     role: 0,
-    countDown: 15,
+    countDown: 0,
     category: "وسائط وتحميل",
     description: "تحميل من يوتيوب عبر Vreden مع بدائل تلقائية — أضف s لعرض قائمة، وmp4 للفيديو",
     usage: [

@@ -6,7 +6,6 @@ import http from "./fetchHttp.js";
 import vreden from "@vreden/youtube_scraper";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
-import { downloadMedia } from "./mediaApi.js";
 
 const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
 const MAX_SEARCH_CACHE_ENTRIES = 100;
@@ -154,20 +153,7 @@ const ytDlpStreamProvider = {
   },
 };
 
-const ytdlpApiProvider = {
-  name: "ytdlp-api",
-  async download(url, wantMp4) {
-    const result = await downloadMedia(url, { type: wantMp4 ? "video" : "audio", q: 360 });
-    return {
-      filePath: result.filePath,
-      title: result.title || "YouTube media",
-      duration: 0,
-      uploader: "",
-    };
-  },
-};
-
-const providers = [ytdlpApiProvider, vredenProvider, ytDlpStreamProvider];
+const providers = [vredenProvider, ytDlpStreamProvider];
 
 export { providers };
 
@@ -182,6 +168,7 @@ export async function searchWithFallback(query, limit = 10) {
   const pending = (async () => {
     const errors = [];
     for (const provider of providers) {
+      if (typeof provider.search !== "function") continue;
       try {
         const results = await provider.search(query, limit);
         if (Array.isArray(results) && results.length) writeSearchCache(cacheKey, results);
@@ -200,17 +187,49 @@ export async function searchWithFallback(query, limit = 10) {
   }
 }
 
-export async function downloadWithFallback(url, wantMp4) {
-  const errors = [];
-  for (const provider of providers) {
-    try {
-      const result = await provider.download(url, wantMp4);
-      return { ...result, provider: provider.name };
-    } catch (error) {
-      errors.push(`${provider.name}: ${error.message}`);
-    }
-  }
-  throw new Error(errors.join(" | ") || "تعذّر التحميل عبر جميع المزوّدين");
+// تحميل "متحوّط": نبدأ بالمزوّد الأول، وإن لم ينجح خلال HEDGE_MS (أو فشل)
+// نشغّل التالي بالتوازي دون إلغاء الأول. أول نتيجة ناجحة تفوز، وتُحذف ملفات الباقي.
+// يحلّ مشكلة خوادم Render التي "تنام" وتستغرق دقيقة+ قبل أن نجرّب البديل.
+const HEDGE_MS = Math.max(500, Number.parseInt(process.env.YT_HEDGE_MS || "", 10) || 4000);
+
+export function downloadWithFallback(url, wantMp4) {
+  return new Promise((resolve, reject) => {
+    const errors = [];
+    const started = new Set();
+    const timers = new Set();
+    let settled = false;
+    let failed = 0;
+
+    const start = (i) => {
+      if (settled || i >= providers.length || started.has(i)) return;
+      started.add(i);
+      const provider = providers[i];
+      if (i + 1 < providers.length) {
+        const t = setTimeout(() => { timers.delete(t); start(i + 1); }, HEDGE_MS);
+        timers.add(t);
+      }
+      Promise.resolve()
+        .then(() => provider.download(url, wantMp4))
+        .then(async (result) => {
+          if (settled) { await cleanTemp(result?.filePath); return; }
+          settled = true;
+          timers.forEach(clearTimeout);
+          resolve({ ...result, provider: provider.name });
+        })
+        .catch((error) => {
+          errors.push(`${provider.name}: ${error?.message || error}`);
+          failed++;
+          if (settled) return;
+          start(i + 1); // فشل → جرّب التالي فوراً دون انتظار مهلة التحوّط
+          if (failed === providers.length) {
+            timers.forEach(clearTimeout);
+            settled = true;
+            reject(new Error(errors.join(" | ") || "تعذّر التحميل عبر جميع المزوّدين"));
+          }
+        });
+    };
+    start(0);
+  });
 }
 
 export async function cleanTemp(filePath) {
