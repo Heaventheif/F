@@ -6,6 +6,7 @@ import http from "./fetchHttp.js";
 import vreden from "@vreden/youtube_scraper";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
+import { downloadFromKord } from "./kordApi.js";
 
 const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
 const MAX_SEARCH_CACHE_ENTRIES = 100;
@@ -153,7 +154,14 @@ const ytDlpStreamProvider = {
   },
 };
 
-const providers = [vredenProvider, ytDlpStreamProvider];
+const kordProvider = {
+  name: "kord-api",
+  async download(url, wantMp4) {
+    return downloadFromKord(url, wantMp4);
+  },
+};
+
+const providers = [kordProvider, vredenProvider, ytDlpStreamProvider];
 
 export { providers };
 

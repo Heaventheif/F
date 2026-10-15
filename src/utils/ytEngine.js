@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import http from "./fetchHttp.js";
 import { getYozoraInfo, getYozoraEntries, getYozoraTitle, buildYozoraDownloadUrl } from "./yozora.js";
 import * as cache from "./cache.js";
+import { downloadFromKord } from "./kordApi.js";
 
 export function extractYoutubeVideoId(raw) {
     let u;
@@ -79,11 +80,21 @@ async function downloadFromYozora(ytUrl, format, suffix, fallbackTitle) {
 }
 
 export async function downloadAudio(ytUrl) {
-    return downloadFromYozora(ytUrl, "bestaudio/best", "mp3", "audio");
+    try {
+        return await downloadFromKord(ytUrl, false);
+    } catch (error) {
+        console.warn(`[YT/audio] Kord failed, using Yozora fallback: ${error.message}`);
+        return downloadFromYozora(ytUrl, "bestaudio/best", "mp3", "audio");
+    }
 }
 
 export async function downloadVideo(ytUrl) {
-    return downloadFromYozora(ytUrl, "bestvideo+bestaudio/best", "mp4", "video");
+    try {
+        return await downloadFromKord(ytUrl, true);
+    } catch (error) {
+        console.warn(`[YT/video] Kord failed, using Yozora fallback: ${error.message}`);
+        return downloadFromYozora(ytUrl, "bestvideo+bestaudio/best", "mp4", "video");
+    }
 }
 
 export { fmtDur, streamToFile };
