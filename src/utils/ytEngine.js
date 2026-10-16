@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import http from "./fetchHttp.js";
 import { getYozoraInfo, getYozoraEntries, getYozoraTitle, buildYozoraDownloadUrl } from "./yozora.js";
 import * as cache from "./cache.js";
-import { downloadFromKord } from "./kordApi.js";
+import { downloadFromXalman } from "./xalmanApi.js";
 
 export function extractYoutubeVideoId(raw) {
     let u;
@@ -81,18 +81,18 @@ async function downloadFromYozora(ytUrl, format, suffix, fallbackTitle) {
 
 export async function downloadAudio(ytUrl) {
     try {
-        return await downloadFromKord(ytUrl, false);
+        return await downloadFromXalman(ytUrl, false);
     } catch (error) {
-        console.warn(`[YT/audio] Kord failed, using Yozora fallback: ${error.message}`);
+        console.warn(`[YT/audio] Xalman failed, using Yozora fallback: ${error.message}`);
         return downloadFromYozora(ytUrl, "bestaudio/best", "mp3", "audio");
     }
 }
 
 export async function downloadVideo(ytUrl) {
     try {
-        return await downloadFromKord(ytUrl, true);
+        return await downloadFromXalman(ytUrl, true);
     } catch (error) {
-        console.warn(`[YT/video] Kord failed, using Yozora fallback: ${error.message}`);
+        console.warn(`[YT/video] Xalman failed, using Yozora fallback: ${error.message}`);
         return downloadFromYozora(ytUrl, "bestvideo+bestaudio/best", "mp4", "video");
     }
 }
