@@ -16,10 +16,8 @@ services:
         value: production
       - key: PORT
         value: "10000"
-      - key: APPSTATE_SECRET
-        generateValue: true
       - key: FB_STATE_PATH
-        value: /app/data/appstate.enc
+        value: /app/data/appstate.json
       - key: MAX_CONCURRENT_COMMANDS
         value: "5"
       - key: INTERNAL_TOKEN
@@ -33,7 +31,7 @@ services:
       - key: HF_INTERNAL_TOKEN
         sync: false
       - key: AUTODL_AUTO
-        value: "off"
+        value: "on"
       - key: YTDLP_URL
         value: https://ytdlp-api-gukc.onrender.com
       - key: YTDLP_KEY

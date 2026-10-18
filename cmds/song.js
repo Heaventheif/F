@@ -63,8 +63,9 @@ async function searchTracks(query, limit) {
       headers: BROWSER_HEADERS,
       timeout: 15000,
     });
-    const tracks = res.data?.collection;
-    if (!tracks?.length) throw new Error("لم تُوجد نتائج على SoundCloud");
+    const tracks = (Array.isArray(res.data?.collection) ? res.data.collection : [])
+      .filter(t => t && typeof t === "object");
+    if (!tracks.length) throw new Error("لم تُوجد نتائج على SoundCloud");
     return tracks;
   };
   try {
@@ -99,10 +100,11 @@ async function downloadToTemp(streamUrl) {
 const RANK = { progressive: [0, 2], hls: [1, 3] };
 const rank = (t) => RANK[t.format?.protocol]?.[t.snipped ? 1 : 0] ?? 4;
 async function streamTrack(track) {
-  const byUrl = new Map((track.media?.transcodings ?? []).filter(t => t.url).map(t => [t.url, t]));
+  const transcodings = Array.isArray(track?.media?.transcodings) ? track.media.transcodings : [];
+  const byUrl = new Map(transcodings.filter(t => t && t.url).map(t => [t.url, t]));
   const candidates = [...byUrl.values()].sort((a, b) => rank(a) - rank(b));
   if (!candidates.length) throw new Error("لا يوجد بث متاح لهذا المقطع");
-  const trackAuth = track.track_authorization ?? "";
+  const trackAuth = track?.track_authorization ?? "";
   const errors = [];
   for (const pick of candidates) {
     for (const refresh of [false, true]) {
@@ -116,11 +118,18 @@ async function streamTrack(track) {
   }
   throw new Error("فشل تشغيل المقطع: " + errors.slice(-3).join(" | "));
 }
+const stage = async (name, fn) => {
+  try { return await fn(); }
+  catch (err) {
+    if (err && typeof err === "object" && !err.stage) err.stage = name;
+    throw err;
+  }
+};
 async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
   let filePath = null;
   try {
-    filePath = await streamTrack(track);
-    await global.mediaSendFile(api, filePath, threadID, messageID);
+    filePath = await stage("download", () => streamTrack(track));
+    await stage("send", () => global.mediaSendFile(api, filePath, threadID, messageID));
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
   } finally {
     if (filePath) await cleanTemp(filePath);
@@ -178,12 +187,13 @@ export default {
     const query = (showList ? args.slice(1) : args).join(" ").trim();
     if (!query) return message.reply("❌ أرسل اسم الأغنية.");
     try {
-      const tracks = await searchTracks(query, showList ? LIST_SIZE : 1);
-      if (showList) await showTrackList(api, event, tracks.slice(0, LIST_SIZE));
+      const tracks = await stage("search", () => searchTracks(query, showList ? LIST_SIZE : 1));
+      if (showList) await stage("list", () => showTrackList(api, event, tracks.slice(0, LIST_SIZE)));
       else await sendTrack(api, threadID, messageID, tracks[0]);
     } catch (err) {
-      console.error("[sc] خطأ:", err.message);
-      global.safeSend(api, `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
+      const msg = String(err?.message ?? err?.error ?? err ?? "").trim();
+      console.error(`[sc] خطأ (${err?.stage || "?"}):`, err?.stack || msg);
+      global.safeSend(api, `❌ ${msg.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
     }
   },
 };

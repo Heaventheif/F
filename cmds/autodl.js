@@ -4,7 +4,7 @@ import { downloadMedia, directSend, directSendParts, splitFile, cleanupParts, NE
 import { checkCooldown, setCooldown } from "../src/utils/access.js";
 const URL_RE = /https?:\/\/[^\s"'<>]+/i;
 const YTDLP_API_LABEL = "YTDLP API";
-const AUTO_ENABLED = String(process.env.AUTODL_AUTO || "").trim().toLowerCase() === "on";
+const AUTO_ENABLED = !["off", "0", "false", "no"].includes(String(process.env.AUTODL_AUTO ?? "on").trim().toLowerCase());
 const AUTO_HOSTS = new Set([
   "youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com",
   "tiktok.com", "www.tiktok.com", "vm.tiktok.com",
@@ -82,7 +82,7 @@ export default {
     usage: [
       "{pn}autodl <رابط> — تحميل فيديو عبر YTDLP API",
       "{pn}autodl audio <رابط> — تحميل صوت عبر YTDLP API",
-      "أرسل الرابط مباشرة بدون أمر — اكتشاف وتحميل تلقائي (يتطلب AUTODL_AUTO=on)"
+      "أرسل الرابط مباشرة بدون أمر — اكتشاف وتحميل تلقائي (مفعّل افتراضياً — لإيقافه AUTODL_AUTO=off)"
     ],
     hidden: true
   },
