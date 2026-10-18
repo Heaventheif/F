@@ -4,8 +4,6 @@ import path from "path";
 import https from "https";
 import http from "http";
 import { execFile } from "child_process";
-import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { assertSafeUrl } from "./fetchHttp.js";
 const MAX_PART_BYTES = 24 * 1024 * 1024;
@@ -147,9 +145,9 @@ async function downloadToTemp(url, ext = "mp4") {
   const { stream, contentLength } = await fetchStream(url);
   if (contentLength > 0 && contentLength > MAX_DOWNLOAD_BYTES) {
     stream.resume();
-    throw new Error(`حجم الملف (${Math.round(contentLength / 1024 / 1024)}MB) يتجاوز الحد المسموح (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB)`);
+    throw Object.assign(new Error(`حجم الملف (${Math.round(contentLength / 1024 / 1024)}MB) يتجاوز الحد المسموح (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB)`), { code: "FILE_TOO_LARGE" });
   }
-  const tmpPath = path.join(os.tmpdir(), `media_${Date.now()}.${ext}`);
+  const tmpPath = path.join(os.tmpdir(), `media_${randomUUID()}.${ext}`);
   const writer = fs.createWriteStream(tmpPath);
   let bytesReceived = 0;
   await new Promise((resolve, reject) => {
@@ -159,7 +157,7 @@ async function downloadToTemp(url, ext = "mp4") {
         stream.destroy();
         writer.destroy();
         fs.remove(tmpPath).catch(() => {});
-        reject(new Error(`الملف تجاوز الحد الأقصى (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB) أثناء التحميل`));
+        reject(Object.assign(new Error(`الملف تجاوز الحد الأقصى (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB) أثناء التحميل`), { code: "FILE_TOO_LARGE" }));
       }
     });
     stream.pipe(writer);
@@ -224,54 +222,78 @@ async function downloadWithLimit(items, fetchFn, limit = 6) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
 }
-const BASE = "https://ytdlp-api-gukc.onrender.com";
-const KEY = process.env.YTDLP_KEY;
-class YtdlpApiError extends Error {
-  constructor(status, message) {
-    super(message || `YTDLP API: HTTP ${status}`);
-    this.name = "YtdlpApiError";
-    this.status = status;
-  }
-}
-function filenameFromDisposition(value) {
-  const match = String(value || "").match(/filename\*=UTF-8''([^;]+)/i);
-  if (!match) return null;
-  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-}
-async function parseError(response) {
-  const body = await response.json().catch(() => ({}));
-  return body?.error || `Download API: HTTP ${response.status}`;
-}
-async function downloadMedia(url, { type = "video", q = 720, dir = os.tmpdir(), filename, onProgress, signal } = {}) {
-  if (!url) throw new YtdlpApiError(400, "الرابط مطلوب");
-  const query = new URLSearchParams({ url: String(url), type, q: String(q) });
-  const headers = KEY?.trim() ? { "X-API-Key": KEY.trim() } : {};
-  const response = await fetch(`${BASE}/stream?${query}`, {
-    headers,
-    signal: signal || AbortSignal.timeout(90_000),
-  });
-  if (!response.ok) throw new YtdlpApiError(response.status, await parseError(response));
-  if (!response.body) throw new YtdlpApiError(502, "API لم يُرجع تدفق التنزيل");
-  await fs.ensureDir(dir);
-  const serverName = filenameFromDisposition(response.headers.get("content-disposition"));
-  const ext = type === "audio" ? "mp3" : "mp4";
-  const safeName = filename || serverName || `media_${randomUUID()}.${ext}`;
-  const filePath = path.join(dir, safeName.replace(/[\\/:*?"<>|]/g, "_"));
+/* ───────── إرسال ملف محلي (تقسيم تلقائي + حذف الملف دائماً) ───────── */
+async function sendFile(api, threadID, filePath, title, replyToID) {
+  let parts = [];
   try {
-    const total = Number(response.headers.get("content-length")) || null;
-    let got = 0;
-    const body = Readable.fromWeb(response.body);
-    body.on("data", chunk => {
-      got += chunk.length;
-      if (onProgress) onProgress(got, total);
-    });
-    await pipeline(body, fs.createWriteStream(filePath));
-    const stat = await fs.stat(filePath);
-    if (!stat.size) throw new YtdlpApiError(502, "الملف المُنزَّل فارغ");
-    return { path: filePath, filePath, bytes: stat.size, title: serverName || "وسائط" };
-  } catch (error) {
+    const { size } = await fs.stat(filePath);
+    if (NEEDS_SPLIT(size)) {
+      const ext = path.extname(filePath).slice(1) || "mp4";
+      parts = await splitFile(filePath, ext);
+      const streams = parts.map(p => ({
+        stream: fs.createReadStream(p),
+        reopen: () => fs.createReadStream(p),
+      }));
+      const { sent } = await directSendParts(api, threadID, title, streams, replyToID);
+      return sent > 0;
+    }
+    return await directSend(api, threadID, { attachment: fs.createReadStream(filePath) }, replyToID);
+  } catch (e) {
+    console.error("[SEND_FILE]", e?.message || e);
+    return false;
+  } finally {
+    if (parts.length) await cleanupParts(parts).catch(() => {});
     await fs.remove(filePath).catch(() => {});
-    throw error;
   }
 }
-export { splitFile, cleanupParts, NEEDS_SPLIT, downloadToTemp, directSend, directSendParts, downloadWithLimit, downloadMedia };
+/* ───────── تحميل رابط مباشر ثم إرساله ───────── */
+async function streamAndSend(api, threadID, mediaUrl, title, ext = "mp4", replyToID = undefined) {
+  let tmpPath;
+  try {
+    ({ tmpPath } = await downloadToTemp(mediaUrl, ext));
+  } catch (e) {
+    console.error("[STREAM_SEND]", e?.message?.substring(0, 200));
+    if (e.code === "FILE_TOO_LARGE") {
+      await global.safeSend(api, `⚠️ ${e.message}`, threadID, undefined, replyToID).catch(() => {});
+      return true;
+    }
+    return false;
+  }
+  return sendFile(api, threadID, tmpPath, title, replyToID);
+}
+/* ───────── تطبيع روابط المنصات قبل إرسالها للمزوّدين ───────── */
+const SHORTLINK_HOSTS = new Set(["vm.tiktok.com", "vt.tiktok.com", "fb.watch", "fb.me", "instagr.am", "ig.me"]);
+const HOST_REWRITES = [
+  { test: /^(m|mobile|touch|web)\.facebook\.com$/i, to: "www.facebook.com" },
+  { test: /^facebook\.com$/i,                       to: "www.facebook.com" },
+  { test: /^m\.instagram\.com$/i,                   to: "www.instagram.com" },
+  { test: /^instagram\.com$/i,                      to: "www.instagram.com" },
+  { test: /^m\.tiktok\.com$/i,                      to: "www.tiktok.com" },
+  { test: /^tiktok\.com$/i,                         to: "www.tiktok.com" },
+];
+const TRACKING_PARAMS = new Set(["fbclid", "gclid", "igshid", "igsh", "si", "ref", "ref_src", "feature", "is_from_webapp", "sender_device", "_r", "_t", "mibextid"]);
+async function resolveShortlink(rawUrl) {
+  try {
+    const res = await fetch(rawUrl, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(6000) });
+    res.body?.cancel?.().catch(() => {});
+    return res.url || rawUrl;
+  } catch { return rawUrl; }
+}
+async function normalizeMediaUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
+  const current = rawUrl.trim();
+  let u;
+  try { u = new URL(current); } catch { return current; }
+  if (SHORTLINK_HOSTS.has(u.hostname.toLowerCase())) {
+    try { u = new URL(await resolveShortlink(current)); } catch {}
+  }
+  const rule = HOST_REWRITES.find(r => r.test.test(u.hostname));
+  if (rule) u.hostname = rule.to;
+  for (const key of [...u.searchParams.keys()]) {
+    const k = key.toLowerCase();
+    if (TRACKING_PARAMS.has(k) || k.startsWith("utm_")) u.searchParams.delete(key);
+  }
+  u.hash = "";
+  return u.toString();
+}
+export { splitFile, cleanupParts, NEEDS_SPLIT, fetchStream, downloadToTemp, directSend, directSendParts, downloadWithLimit, sendFile, streamAndSend, normalizeMediaUrl };

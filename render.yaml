@@ -32,7 +32,3 @@ services:
         sync: false
       - key: AUTODL_AUTO
         value: "on"
-      - key: YTDLP_URL
-        value: https://ytdlp-api-gukc.onrender.com
-      - key: YTDLP_KEY
-        sync: false
