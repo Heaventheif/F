@@ -1,0 +1,10 @@
+"use strict";
+export const connectDB         = async () => false;
+export const disconnectDB      = async () => {};
+export const flushAllAndDisconnect = async () => {};
+export const saveUserData      = async () => {};
+export const loadUserData      = async () => null;
+export const isConnected       = () => false;
+export const addBanDB    = async (_type, _id, _by, _reason) => {};
+export const removeBanDB = async (_type, _id) => {};
+export default { connectDB, disconnectDB, flushAllAndDisconnect, isConnected, addBanDB, removeBanDB };

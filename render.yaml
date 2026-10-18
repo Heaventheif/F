@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: xx-bot
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: node main.js
+    healthCheckPath: /health
+    disk:
+      name: bot-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: APPSTATE_SECRET
+        generateValue: true
+      - key: FB_STATE_PATH
+        value: /app/data/appstate.enc
+      - key: MAX_CONCURRENT_COMMANDS
+        value: "5"
+      - key: INTERNAL_TOKEN
+        generateValue: true
+      - key: APPSTATE
+        sync: false
+      - key: YT_HEDGE_MS
+        value: "2000"
+      - key: MEDIA_GAP_MS
+        value: "1200"
+      - key: HF_INTERNAL_TOKEN
+        sync: false
+      - key: AUTODL_AUTO
+        value: "off"
+      - key: YTDLP_URL
+        value: https://ytdlp-api-gukc.onrender.com
+      - key: YTDLP_KEY
+        sync: false
