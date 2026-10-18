@@ -1,4 +1,6 @@
 "use strict";
+
+// ─── Message API ────────────────────────────────────────────────
 function buildMessageAPI(api, threadID, messageID) {
   return {
     reply: (t, cb) => new Promise((resolve, reject) => {
@@ -21,33 +23,124 @@ function buildMessageAPI(api, threadID, messageID) {
     },
   };
 }
+
 function getReplyTargetID(event) {
   return event?.messageReply?.messageID || event?.messageID;
 }
-function buildBanAwareStore({ getMap, banSet }) {
+
+// ─── Users Interface ────────────────────────────────────────────
+// واجهة موحَّدة لبيانات المستخدمين تعمل مع:
+//   • global.usersData  (Map في الذاكرة — دائماً موجودة)
+//   • BanModel / global._bannedUsers  (MongoDB — إن كان متصلاً)
+// تتوافق مع: Users.getData(uid) / Users.setData(uid, obj)
+function buildUsersInterface() {
   return {
-    getData: async (id) => {
-      const key = String(id);
-      const map = getMap();
-      if (map?.has?.(key)) return map.get(key);
-      return banSet === "_bannedGroups" ? { banned: global._bannedGroups?.has(key) ?? false } : {};
-    },
-    setData: async (id, data) => {
-      const key = String(id);
-      const map = getMap();
-      if (map) {
-        const merged = { ...(map.get(key) ?? {}), ...data };
-        map.set(key, banSet === "_bannedGroups" ? merged : { ...merged, _dirty: true });
+    /**
+     * جلب بيانات مستخدم — يُعيد الكائن أو {} إذا لم يوجد
+     */
+    getData: async (uid) => {
+      const key = String(uid);
+      // global.getUserData يُعيد من الـ Map أولاً ثم MongoDB
+      if (typeof global.getUserData === "function") {
+        try { return await global.getUserData(key); } catch (_) {}
       }
+      return global.usersData?.get(key) ?? {};
+    },
+
+    /**
+     * تحديث بيانات مستخدم — يدمج مع القيم الموجودة
+     * يدعم حقل banned بشكل خاص: يحدِّث global._bannedUsers + BanModel
+     */
+    setData: async (uid, data) => {
+      const key = String(uid);
+
+      // ─ تحديث الـ Map في الذاكرة ─
+      const existing = global.usersData?.get(key) ?? {};
+      const merged   = { ...existing, ...data };
+      global.usersData?.set(key, { ...merged, _dirty: true });
+
+      // ─ معالجة حقل banned بشكل خاص ─
       if ("banned" in data) {
-        const set = global[banSet];
-        if (data.banned) set?.add(key); else set?.delete(key);
+        if (data.banned) {
+          global._bannedUsers?.add(key);
+        } else {
+          global._bannedUsers?.delete(key);
+        }
+        // حفظ في BanModel إذا كانت MongoDB متصلة
+        if (global.db) {
+          try {
+            const { addBanDB, removeBanDB } = await import("../db/index.js");
+            if (data.banned) {
+              await addBanDB("user", key, data.bannedBy ?? null, data.banReason ?? null);
+            } else {
+              await removeBanDB("user", key);
+            }
+          } catch (e) {
+            console.warn("[Users.setData] فشل تحديث BanModel:", e.message);
+          }
+        }
       }
     },
   };
 }
-const buildUsersInterface   = () => buildBanAwareStore({ getMap: () => global.usersData,   banSet: "_bannedUsers"  });
-const buildThreadsInterface = () => buildBanAwareStore({ getMap: () => global.threadsData, banSet: "_bannedGroups" });
+
+// ─── Threads Interface ───────────────────────────────────────────
+// واجهة موحَّدة لبيانات المجموعات تعمل مع:
+//   • global.threadsData  (Map في الذاكرة — إن وُجدت)
+//   • BanModel / global._bannedGroups  (MongoDB — إن كان متصلاً)
+// تتوافق مع: Threads.getData(tid) / Threads.setData(tid, obj)
+function buildThreadsInterface() {
+  return {
+    /**
+     * جلب بيانات مجموعة — يُعيد الكائن أو {} إذا لم توجد
+     */
+    getData: async (tid) => {
+      const key = String(tid);
+      if (global.threadsData?.has?.(key)) return global.threadsData.get(key);
+      // إذا لم توجد threadsData نُعيد كائناً يحتوي حالة الحظر على الأقل
+      const banned = global._bannedGroups?.has(key) ?? false;
+      return { banned };
+    },
+
+    /**
+     * تحديث بيانات مجموعة — يدمج مع القيم الموجودة
+     * يدعم حقل banned بشكل خاص: يحدِّث global._bannedGroups + BanModel
+     */
+    setData: async (tid, data) => {
+      const key = String(tid);
+
+      // ─ تحديث الـ Map في الذاكرة (إن وُجدت) ─
+      if (global.threadsData) {
+        const existing = global.threadsData.get(key) ?? {};
+        global.threadsData.set(key, { ...existing, ...data });
+      }
+
+      // ─ معالجة حقل banned بشكل خاص ─
+      if ("banned" in data) {
+        if (data.banned) {
+          global._bannedGroups?.add(key);
+        } else {
+          global._bannedGroups?.delete(key);
+        }
+        // حفظ في BanModel إذا كانت MongoDB متصلة
+        if (global.db) {
+          try {
+            const { addBanDB, removeBanDB } = await import("../db/index.js");
+            if (data.banned) {
+              await addBanDB("group", key, data.bannedBy ?? null, data.banReason ?? null);
+            } else {
+              await removeBanDB("group", key);
+            }
+          } catch (e) {
+            console.warn("[Threads.setData] فشل تحديث BanModel:", e.message);
+          }
+        }
+      }
+    },
+  };
+}
+
+// ─── Command Context ─────────────────────────────────────────────
 function buildCommandContext({ api, event, args = [], role = 0, prefix = "", isGroupAdmin = false }) {
   const { threadID } = event;
   const commandMessageID = event.messageID;
@@ -69,8 +162,19 @@ function buildCommandContext({ api, event, args = [], role = 0, prefix = "", isG
     usersData:  global.usersData,
     globalData: global.globalData,
     db:         global.db,
-    Users:      buildUsersInterface(),
-    Threads:    buildThreadsInterface(),
+    Users:      buildUsersInterface(),    // ← إصلاح: كانت مفقودة
+    Threads:    buildThreadsInterface(),  // ← إصلاح: كانت مفقودة
   };
 }
+
 export { buildMessageAPI, buildCommandContext, getReplyTargetID };
+
+// ─── Plugin Descriptor ──────────────────────────────────────────
+/** @type {import('../plugin-provider.js').XxPlugin} */
+export const $plugin = {
+  name: 'xx-core-context',
+  meta: { category: 'core', path: 'src/core/Context.js' },
+  setup(_ctx) {
+    // provides: buildCommandContext, buildMessageAPI
+  },
+};

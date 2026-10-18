@@ -1,7 +1,33 @@
 "use strict";
-import "./src/bootstrap.js";
+process.env.TZ = 'Europe/Berlin';
+
+// ── BUG-01 FIX: علَم يمنع fcanew-r3nz75 من تسجيل معالجات أخطاء مكررة ──────────────
+global.__mainErrorHandlersInstalled = true;
+
 import path from "path";
-import { checkEnv, loadConfig, cleanupOrphanTempFiles } from "./src/utils/system.js";
+import { checkEnv } from "./src/utils/envCheck.js";
+
+global.__critLogLast = 0;
+process.on("uncaughtException", (err) => {
+  if (err.code === "EPIPE" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT") return;
+  const now = Date.now();
+  if (now - global.__critLogLast > 5000) {
+    global.__critLogLast = now;
+    console.error("[uncaughtException]", err?.stack || err?.message || err);
+  }
+});
+function safeStringify(v) {
+  if (v instanceof Error) return v.stack || v.message;
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+process.on("unhandledRejection", (reason) => {
+  const msg = safeStringify(reason);
+  if (msg.includes("EPIPE") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT")) return;
+  console.error("[unhandledRejection]", msg);
+});
+
+// Reaction listener مع proxy لتتبع الطوابع الزمنية
 const _reactionTimestamps  = new Map();
 const _reactionListenerRaw = {};
 const reactionListenerProxy = new Proxy(_reactionListenerRaw, {
@@ -16,10 +42,12 @@ const reactionListenerProxy = new Proxy(_reactionListenerRaw, {
     return true;
   }
 });
+
 global.client              = { reactionListener: reactionListenerProxy };
 global._reactionTimestamps = _reactionTimestamps;
 global.Kagenou             = { replies: {} };
 global.config              = { admins: [], moderators: [], developers: [], vips: [], Prefix: [""], botName: "Sunken Bot" };
+global._botAdminIds        = new Map();
 global.globalData          = new Map();
 global.usersData           = new Map();
 global.userCooldowns       = new Map();
@@ -27,78 +55,75 @@ global.commands            = new Map();
 global.eventCommands       = [];
 global.appState            = {};
 global.botApi              = null;
-global.botFatal            = null;
+// botApis kept as array for compatibility with shutdown logic (single element)
 global.botApis             = [];
+global.scheduler           = null;
 global.perfManager         = null;
+global.sessionGuard        = null;
 global.db                  = null;
+
 import "./src/utils/safeSend.js";
 import { startWebServer }    from "./src/webServer.js";
+import { loadConfig }        from "./src/config/index.js";
 import { loadCommands }      from "./src/core/Loader.js";
 import {
   PROJECT_ROOT,
   loadAppState,
   loginBot,
 } from "./src/fca/Client.js";
+import { cleanupOrphanTempFiles } from "./src/utils/tempCleanup.js";
+
+try { await import("dotenv/config"); } catch (_) {}
+
 checkEnv(PROJECT_ROOT);
+
 global.log = {
   info:    msg => console.log("[INFO]",    msg),
   warn:    msg => console.log("[WARN]",    msg),
   error:   msg => console.log("[ERROR]",   msg),
   success: msg => console.log("[SUCCESS]", msg),
 };
+
 loadConfig(PROJECT_ROOT);
-const COMMANDS_DIR = path.join(PROJECT_ROOT, "cmds");
+
+const COMMANDS_DIR = path.join(PROJECT_ROOT, "src", "cmds");
+
+global.reloadCommands = () => loadCommands(COMMANDS_DIR);
+
 ["SIGTERM", "SIGINT"].forEach(sig => {
   process.on(sig, async () => {
     console.log(`[SHUTDOWN] ${sig} — إيقاف الجلسة...`);
     const api = global.botApi;
     if (api) {
-      try { await api.__stopSessionLifecycle?.(); } catch (e) { console.warn("[SHUTDOWN] stop failed:", e?.message ?? e); }
+      try { await api.__stopSessionLifecycle?.(); } catch (_) {}
+      api._scheduler?.destroy();
+      try { api.__sessionLock?.release(); } catch (_) {}
     }
     process.exit(0);
   });
 });
-const FATAL_LOGIN = /checkpoint|appstate|login approvals|not logged in/i;
-async function loginWithBackoff(account, { baseMs = 5_000, capMs = 600_000, max = 8 } = {}) {
-  for (let attempt = 1; attempt <= max; attempt++) {
-    try {
-      return await loginBot(account);
-    } catch (err) {
-      const msg = String(err?.message ?? err);
-      console.error(`[LOGIN] محاولة ${attempt}/${max}: ${msg}`);
-      if (FATAL_LOGIN.test(msg)) { err.fatal = true; throw err; }
-      if (attempt === max) throw err;
-      const ceiling = Math.min(capMs, baseMs * 2 ** (attempt - 1));
-      await new Promise((r) => setTimeout(r, 1_000 + Math.random() * ceiling));
-    }
-  }
-}
+
 const startBot = async () => {
   startWebServer();
   cleanupOrphanTempFiles();
+
   await loadCommands(COMMANDS_DIR);
+
+  // ── حساب بوت واحد فقط ────────────────────────────────────────────────────
   const account = loadAppState();
+
   if (!account) {
     console.error("[LOGIN] ❌ لا يوجد APPSTATE — أضف APPSTATE في متغيرات البيئة.");
-    global.botFatal = "APPSTATE missing";
     return;
   }
+
   console.log("[BOT] 🚀 تسجيل الدخول بحساب واحد...");
   try {
-    await loginWithBackoff(account);
-    global.botFatal = null;
+    await loginBot(account);
     console.log("[BOT] ✅ البوت متصل وجاهز.");
   } catch (err) {
-    global.botFatal = err.message;
-    if (err.fatal) {
-      console.error("[BOT] ❌ خطأ دخول قاتل — يعمل في وضع متدهور (/ready يعيد 503):", err.message);
-    } else {
-      console.error("[BOT] ❌ استُنفدت محاولات الدخول المؤقتة — خروج لإعادة التشغيل:", err.message);
-      process.exit(1);
-    }
+    console.error("[BOT] ❌ فشل الدخول:", err.message);
   }
 };
-startBot().catch((err) => {
-  console.error("[FATAL_STARTUP]", err?.stack ?? err);
-  process.exitCode = 1;
-});
+
+startBot();

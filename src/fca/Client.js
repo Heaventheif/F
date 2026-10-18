@@ -3,7 +3,7 @@
  * src/fca/Client.js — v4.0
  * ───────────────────────────
  * تحسينات v4.0:
- *  - يقرأ AppState من: env → ذاكرة → ملف الحالة (بقاء بعد التحطُّم)
+ *  - يقرأ AppState من: env → ذاكرة → ملف مشفَّر (بقاء بعد التحطُّم)
  *  - يحفظ بـ mergeAppStates (لا يُقلِّص jar)
  *  - يتحقق من الكوكيز المطلوبة قبل الحفظ
  */
@@ -14,7 +14,7 @@ import { createRequire }  from "node:module";
 import { fileURLToPath }  from "node:url";
 
 const require = createRequire(import.meta.url);
-const fcaNx   = require("./fcanew");
+const fcaNx   = require("fcanew-r3nz75");
 const login   = fcaNx.login ?? fcaNx.default ?? fcaNx;
 
 import { readAppStateFromEnv, updateAppStateInMemory } from "./runtimeEnv.js";
@@ -49,20 +49,20 @@ function saveBotName(botIndex, name) {
 
 export function getBotName(botIndex) { return loadBotNames()[String(botIndex)] || null; }
 
-// ── AppState — قراءة (env → ذاكرة → ملف الحالة) ───────────────────────────
+// ── AppState — قراءة (env → ذاكرة → ملف مشفَّر) ───────────────────────────
 export function loadAppState() {
   // 1. من البيئة
   let state = readAppStateFromEnv();
   if (state) return { state, index: 1, source: "APPSTATE" };
 
-  // 2. من ملف الحالة (جديد v4.0 — يبقى بعد تحطُّم العملية)
+  // 2. من ملف مشفَّر (جديد v4.0 — يبقى بعد تحطُّم العملية)
   try {
     const fromFile = readPersistedAppState();
     if (Array.isArray(fromFile) && fromFile.length) {
-      console.warn("[APPSTATE] ⚠️ استعادة من ملف الحالة (البيئة فارغة)");
-      return { state: fromFile, index: 1, source: "state-file" };
+      console.warn("[APPSTATE] ⚠️ استعادة من الملف المشفَّر (البيئة فارغة)");
+      return { state: fromFile, index: 1, source: "encrypted-file" };
     }
-  } catch (e) { console.warn("[APPSTATE] تعذّرت قراءة ملف الحالة:", e?.message ?? e); }
+  } catch (_) {}
 
   return null;
 }
@@ -72,7 +72,7 @@ export function loadAllAppStates() {
   return account ? [account] : [];
 }
 
-// ── AppState — حفظ (merge) ─────────────────────────────────────────
+// ── AppState — حفظ (merge + تشفير) ─────────────────────────────────────────
 export function saveAppStateForBot(state, botIndex = 1, source = "runtime") {
   try {
     if (!Array.isArray(state) || state.length === 0) throw new Error("فارغ");
@@ -82,7 +82,7 @@ export function saveAppStateForBot(state, botIndex = 1, source = "runtime") {
     // تحديث في الذاكرة
     updateAppStateInMemory(state);
 
-    // merge + حفظ على القرص (جديد v4.0)
+    // merge + تشفير على القرص (جديد v4.0)
     persistAppState(state, source);
 
     console.log(`[APPSTATE] ✅ حُفظ (${state.length} cookie | Bot-${botIndex} | ${source})`);

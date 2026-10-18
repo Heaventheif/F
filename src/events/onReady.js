@@ -1,5 +1,7 @@
 "use strict";
-import { cache, cleanupOrphanTempFiles } from "../utils/system.js";
+import cache from "../utils/cache.js";
+import { cleanupOrphanTempFiles } from "../utils/tempCleanup.js";
+
 export function startCleanupInterval() {
   setInterval(() => {
     const now     = Date.now();
@@ -12,6 +14,11 @@ export function startCleanupInterval() {
     for (const [key, exp] of global.userCooldowns.entries()) {
       if (now >= exp) { global.userCooldowns.delete(key); cleaned++; }
     }
+    for (const [uid, data] of global.usersData.entries()) {
+      if (data._lastSeen && now - data._lastSeen > 60 * 60 * 1000) {
+        global.usersData.delete(uid); cleaned++;
+      }
+    }
     for (const [msgID, ts] of global._reactionTimestamps.entries()) {
       if (now - ts > 10 * 60 * 1000) {
         delete global.client.reactionListener[msgID];
@@ -20,8 +27,9 @@ export function startCleanupInterval() {
       }
     }
     cleanupOrphanTempFiles();
-    try { cleaned += cache.sweep(); } catch (e) { console.warn("[CLEANUP] cache.sweep:", e?.message ?? e); }
-    try { cleaned += global.cleanupIdleThreadGates(); } catch (e) { console.warn("[CLEANUP] gates:", e?.message ?? e); }
+    try { cleaned += cache.sweep(); } catch (_) {}
+    try { cleaned += global.cleanupIdleThreadGates(); } catch (_) {}
+    try { Bun.gc(true); } catch (_) {}
     const mem = process.memoryUsage();
     const pm  = global.perfManager?.getMetrics();
     console.log(
@@ -30,5 +38,16 @@ export function startCleanupInterval() {
       (pm ? ` | Cache: ${pm.cacheSize} (hit ${(pm.cacheHitRate * 100).toFixed(0)}%) | avg: ${pm.avgResponseTimeMs}ms` : "") +
       ` | Bots: ${global.botApis.length}`
     );
-  }, 10 * 60 * 1000).unref();
+  // HIGH-03 FIX: .unref() يمنع دورة cleanup (التي تشمل Bun.gc(true)) من
+  // إبقاء العملية حية بعد SIGTERM في حالة التخلص اللطيف من الموارد.
+}, 10 * 60 * 1000).unref();
 }
+// ─── Plugin Descriptor ──────────────────────────────────────────
+/** @type {import('../plugin-provider.js').XxPlugin} */
+export const $plugin = {
+  name: 'xx-events-on-ready',
+  meta: { category: 'event', path: 'src/events/onReady.js' },
+  setup(_ctx) {
+    // provides: startCleanupInterval
+  },
+};

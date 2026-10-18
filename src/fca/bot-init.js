@@ -12,19 +12,16 @@ const require = createRequire(import.meta.url);
 // fcanew-r3nz75 exports
 let _attachThreadInfoRealtimeSync = null;
 try {
-  const fcaNx = require("./fcanew");
+  const fcaNx = require("fcanew-r3nz75");
   _attachThreadInfoRealtimeSync = fcaNx.attachThreadInfoRealtimeSync ?? null;
 } catch (_) {}
 
 // ── SessionExtender (اختياري) ─────────────────────────────────────────────────
 let _createSessionExtender = null;
 try {
-  const mod = await import("./session-extender.js").catch((e) => {
-    console.warn("[EXTENDER:load] فشل تحميل session-extender.js — تمديد الجلسة معطّل:", e?.stack ?? e?.message ?? e);
-    return null;
-  });
+  const mod = await import("./session-extender.js").catch(() => null);
   _createSessionExtender = mod?.createSessionExtender ?? null;
-} catch (e) { console.warn("[EXTENDER:load]", e?.message ?? e); }
+} catch (_) {}
 
 // ────────────────────────────────────────────────────────────────────────────
 // startMqttListener

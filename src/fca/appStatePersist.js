@@ -1,9 +1,9 @@
 "use strict";
 /**
- * appStatePersist.js — v4.0 (Merge-on-Save — بدون تشفير)
+ * appStatePersist.js — v4.0 (محسَّن مع AES-256-GCM + Merge-on-Save)
  * ──────────────────────────────────────────────────────────────────────
  * تحسينات v4.0 (مُجمَّعة من 7 مكتبات):
- *  - حفظ على القرص بصيغة JSON عادية (بدون تشفير ولا مفتاح)
+ *  - AES-256-GCM تشفير على القرص (من fca-unofficial CookieRefresher)
  *  - Merge-on-Save: لا تُقلِّص jar الكوكيز أبداً (من nkxfca appStateBackup)
  *  - كتابة ذرية (write-then-rename) لمنع الفساد عند kill -9
  *  - تتبع TTL دقيق مع تصنيف حسب الأهمية
@@ -25,7 +25,8 @@ const CRITICAL_COOKIES    = ["c_user", "xs"];
 const REFRESHABLE_COOKIES = ["fr", "sb"];
 
 export const STATE_FILE = process.env.FB_STATE_PATH ||
-  path.join(process.env.STATE_DIR || path.resolve(process.cwd(), "data"), "appstate.json");
+  path.join(process.env.STATE_DIR || path.resolve(process.cwd(), "data"), "appstate.enc");
+const ALGO       = "aes-256-gcm";
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 
 // ── نسخة في الذاكرة ────────────────────────────────────────────────────────
@@ -41,13 +42,34 @@ export function readPersistedAppState() {
   return _atomicRead(STATE_FILE);
 }
 
-// ── صيغة الملف (JSON عادي) ─────────────────────────────────────────────────
-function _packState(obj) { return { v: 2, ts: Date.now(), state: obj }; }
-function _unpackState(raw) {
-  if (Array.isArray(raw)) return raw;
-  if (raw && raw.v === 2 && Array.isArray(raw.state)) return raw.state;
-  if (raw && raw.v === 1) console.warn("[APPSTATE] ⚠️ ملف قديم مشفَّر (v1) — تجاهله وسيُستبدل عند أول حفظ");
-  return null;
+// ── تشفير AES-256-GCM ──────────────────────────────────────────────────────
+function _getKey() {
+  const k =
+    process.env.FCA_STATE_KEY ||
+    process.env.STATE_ENCRYPT_KEY ||
+    process.env.APPSTATE_SECRET ||
+    "";
+  if (k.length < 32) return null;
+  return crypto.createHash("sha256").update(k, "utf8").digest();
+}
+
+function _encryptJson(obj) {
+  const key = _getKey();
+  if (!key) return null;
+  const iv     = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ALGO, key, iv);
+  const data   = Buffer.concat([cipher.update(JSON.stringify(obj), "utf8"), cipher.final()]);
+  return { v: 1, iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64"), ts: Date.now() };
+}
+
+function _decryptJson(p) {
+  const key = _getKey();
+  if (!key || !p || p.v !== 1) return null;
+  try {
+    const dec = crypto.createDecipheriv(ALGO, key, Buffer.from(p.iv, "base64"));
+    dec.setAuthTag(Buffer.from(p.tag, "base64"));
+    return JSON.parse(Buffer.concat([dec.update(Buffer.from(p.data, "base64")), dec.final()]).toString("utf8"));
+  } catch { return null; }
 }
 
 // ── كتابة ذرية ─────────────────────────────────────────────────────────────
@@ -55,12 +77,14 @@ function _atomicWrite(filePath, obj) {
   const tmp = `${filePath}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(_packState(obj)), { encoding: "utf8", mode: 0o600 });
+    const payload = _encryptJson(obj);
+    if (!payload) return false;
+    fs.writeFileSync(tmp, JSON.stringify(payload), "utf8");
     fs.renameSync(tmp, filePath);
     return true;
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (_) {}
-    console.warn(`[APPSTATE] ⚠️ فشل حفظ ملف الحالة: ${e.message}`);
+    console.warn(`[APPSTATE] ⚠️ فشل الحفظ المشفَّر: ${e.message}`);
     return false;
   }
 }
@@ -69,16 +93,13 @@ function _atomicRead(filePath) {
   if (!fs.existsSync(filePath)) return null;
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    const ts = typeof raw?.ts === "number" ? raw.ts : fs.statSync(filePath).mtimeMs;
-    if (Date.now() - ts > MAX_AGE_MS) {
+    if (!raw || typeof raw.ts !== "number") return null;
+    if (Date.now() - raw.ts > MAX_AGE_MS) {
       console.warn("[APPSTATE] ⚠️ ملف الحالة أقدم من 7 أيام — تجاهله");
       return null;
     }
-    return _unpackState(raw);
-  } catch (e) {
-    console.warn(`[APPSTATE] ⚠️ ملف الحالة غير مقروء: ${e.message}`);
-    return null;
-  }
+    return _decryptJson(raw);
+  } catch { return null; }
 }
 
 // ── Merge-on-Save ───────────────────────────────────────────────────────────
@@ -114,12 +135,12 @@ export async function resolveAppState(envState, _botIndex = 1) {
     console.warn("[APPSTATE] ⚠️ البيئة فارغة — استخدام نسخة الذاكرة");
     return { state: _inMemoryState, source: "memory" };
   }
-  // 3. من ملف الحالة
+  // 3. من الملف المشفَّر (جديد v4.0)
   const fromFile = _atomicRead(STATE_FILE);
   if (fromFile && _validateAppState(fromFile)) {
-    console.warn("[APPSTATE] ⚠️ استعادة من ملف الحالة (نجا من تحطُّم)");
+    console.warn("[APPSTATE] ⚠️ استعادة من الملف المشفَّر (نجا من تحطُّم)");
     _updateMemoryCache(_normalizeAppState(fromFile));
-    return { state: fromFile, source: "state-file" };
+    return { state: fromFile, source: "encrypted-file" };
   }
   console.error("[APPSTATE] ❌ لا يوجد AppState صالح");
   return { state: null, source: null };
@@ -140,7 +161,7 @@ export function persistAppState(state, source = "auto") {
   const normalized = _normalizeAppState(merged);
   const newHash    = _hashState(normalized);
 
-  // An unchanged memory cache does not imply the state file exists (e.g.
+  // An unchanged memory cache does not imply the encrypted file exists (e.g.
   // resolveAppState(envState) sets the cache before the first save).
   if (newHash === _inMemoryHash && onDisk &&
       newHash === _hashState(_normalizeAppState(onDisk))) return false;
@@ -155,10 +176,10 @@ export function persistAppState(state, source = "auto") {
     console.warn(`[APPSTATE] ⚠️ فشل env: ${e.message}`);
   }
 
-  // حفظ على القرص
+  // حفظ مشفَّر على القرص (جديد v4.0)
   const saved = _atomicWrite(STATE_FILE, normalized);
 
-  console.log(`[APPSTATE] 💾 حُفظ (${normalized.length} cookie | ${source}${saved ? " | disk" : ""})`);
+  console.log(`[APPSTATE] 💾 حُفظ (${normalized.length} cookie | ${source}${saved ? " | 🔒disk" : ""})`);
 
   // Metrics are maintained by the bot process; persistence must not depend on fcanew-r3nz75 internals.
   return true;

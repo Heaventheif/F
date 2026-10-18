@@ -124,7 +124,7 @@ export class SessionExtender extends EventEmitter {
     const kaEnabled = this._keepAliveEnabled();
     console.log(
       `[EXTENDER:${this._label}] ▶️ SessionExtender v3.0 نشط\n` +
-      `  ↳ keep-alive: ${kaEnabled ? `كل ${Math.round(this._keepAliveMs / 3_600_000)} ساعة` : "معطّل (FCA_ENABLE_KEEPALIVE=false)"}\n` +
+      `  ↳ keep-alive: ${kaEnabled ? `كل ${Math.round(this._keepAliveMs / 3_600_000)} ساعة` : "معطّل (FCA_ENABLE_KEEPALIVE=true لتفعيله)"}\n` +
       `  ↳ عتبة التجديد: ${Math.round(this._threshold / 86_400_000)} يوم\n` +
       `  ↳ فحص الصحة: تكيّفي (10–45 دقيقة)`
     );
@@ -426,8 +426,7 @@ export class SessionExtender extends EventEmitter {
   // ── مساعدات ─────────────────────────────────────────────────────────────────
 
   _keepAliveEnabled() {
-    // مفعّل افتراضياً — لإيقافه فقط: FCA_ENABLE_KEEPALIVE=false
-    return !["false", "0", "off", "no"].includes(String(process.env.FCA_ENABLE_KEEPALIVE ?? "true").trim().toLowerCase());
+    return String(process.env.FCA_ENABLE_KEEPALIVE || "").toLowerCase() === "true";
   }
 }
 

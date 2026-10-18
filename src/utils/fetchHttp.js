@@ -1,76 +1,27 @@
 "use strict";
 import { Readable } from "stream";
+import { Agent as HttpAgent } from "http";
+import { Agent as HttpsAgent } from "https";
 import { promises as dns } from "dns";
 import net from "net";
-function _ipv4ToInt(ip) {
-  const p = String(ip).split(".");
-  if (p.length !== 4) return null;
-  let n = 0;
-  for (const part of p) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const v = Number(part);
-    if (v > 255) return null;
-    n = (n * 256) + v;
+
+// ─── SSRF Guard ─────────────────────────────────────────────────
+function _isPrivateIp(ip) {
+  if (net.isIPv6(ip)) {
+    return ip === "::1" || ip.startsWith("fc00") || ip.startsWith("fe80") || ip === "::" ;
   }
-  return n;
-}
-const _V4_BLOCKED = [
-  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
-  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16],
-  ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4],
-].map(([a, bits]) => [_ipv4ToInt(a), bits]);
-function _v4Private(n) {
-  if (n === null) return true;
-  return _V4_BLOCKED.some(([base, bits]) => Math.floor(n / 2 ** (32 - bits)) === Math.floor(base / 2 ** (32 - bits)));
-}
-function _ipv6ToBigInt(ip) {
-  let s = String(ip).toLowerCase();
-  const z = s.indexOf("%"); if (z >= 0) s = s.slice(0, z);
-  const m = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
-  if (m) {
-    const v4 = _ipv4ToInt(m[2]); if (v4 === null) return null;
-    s = `${m[1]}${Math.floor(v4 / 65536).toString(16)}:${(v4 % 65536).toString(16)}`;
-  }
-  const halves = s.split("::");
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(":") : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-  let groups;
-  if (halves.length === 1) { if (head.length !== 8) return null; groups = head; }
-  else {
-    const missing = 8 - head.length - tail.length;
-    if (missing < 1) return null;
-    groups = [...head, ...Array(missing).fill("0"), ...tail];
-  }
-  let n = 0n;
-  for (const g of groups) {
-    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
-    n = (n << 16n) | BigInt(parseInt(g, 16));
-  }
-  return n;
-}
-function _v6Private(ip) {
-  const n = _ipv6ToBigInt(ip);
-  if (n === null) return true;
-  const top = (bits) => n >> BigInt(128 - bits);
-  if (n === 0n || n === 1n) return true;
-  if (top(7) === 0xfcn >> 1n) return true;
-  if (top(10) === 0x3fan) return true;
-  if (top(10) === 0x3fbn) return true;
-  if (top(8) === 0xffn) return true;
-  const low32 = Number(n & 0xffffffffn);
-  if (top(96) === 0xffffn) return _v4Private(low32);
-  if (top(96) === 0n) return _v4Private(low32);
-  if (top(96) === 0x0064ff9b0000000000000000n) return _v4Private(low32);
-  if (top(16) === 0x2002n) return _v4Private(Number((n >> 80n) & 0xffffffffn));
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(isNaN)) return true; // malformed → block
+  if (parts[0] === 10) return true;                                  // 10.0.0.0/8
+  if (parts[0] === 127) return true;                                 // 127.0.0.0/8
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
+  if (parts[0] === 192 && parts[1] === 168) return true;            // 192.168.0.0/16
+  if (parts[0] === 169 && parts[1] === 254) return true;            // 169.254.0.0/16 (link-local / cloud metadata)
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // 100.64.0.0/10 (CGNAT)
+  if (parts[0] === 0) return true;                                   // 0.0.0.0/8
   return false;
 }
-function _isPrivateIp(ip) {
-  const bare = String(ip).replace(/^\[|\]$/g, "");
-  if (net.isIPv4(bare)) return _v4Private(_ipv4ToInt(bare));
-  if (net.isIPv6(bare)) return _v6Private(bare);
-  return true;
-}
+
 async function _assertSafeUrl(rawUrl) {
   let parsed;
   try {
@@ -81,44 +32,28 @@ async function _assertSafeUrl(rawUrl) {
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error(`[SSRF] Disallowed protocol: ${parsed.protocol}`);
   }
-  const host = parsed.hostname.replace(/^\[|\]$/g, "");
-  if (net.isIP(host)) {
-    if (_isPrivateIp(host)) throw new Error(`[SSRF] Direct private IP blocked: ${host}`);
-    return;
+  // Block bare IP literals in the hostname
+  if (net.isIP(parsed.hostname) && _isPrivateIp(parsed.hostname)) {
+    throw new Error(`[SSRF] Direct private IP blocked: ${parsed.hostname}`);
   }
+  // DNS pre-resolution — block hostnames that resolve to private ranges
   let records;
   try {
-    records = await dns.lookup(host, { all: true });
+    records = await dns.lookup(parsed.hostname, { all: true });
   } catch (e) {
-    throw new Error(`[SSRF] DNS resolution failed for ${host}: ${e.message}`);
+    throw new Error(`[SSRF] DNS resolution failed for ${parsed.hostname}: ${e.message}`);
   }
   for (const { address } of records) {
     if (_isPrivateIp(address)) {
-      throw new Error(`[SSRF] Hostname ${host} resolves to private IP ${address} — blocked.`);
+      throw new Error(`[SSRF] Hostname ${parsed.hostname} resolves to private IP ${address} — blocked.`);
     }
   }
 }
-async function fetchFollowingSafely(url, init, maxHops = 5) {
-  let current = url;
-  for (let hop = 0; hop <= maxHops; hop++) {
-    await _assertSafeUrl(current);
-    const res = await fetch(current, { ...init, redirect: "manual" });
-    const loc = res.headers.get("location");
-    if (res.status < 300 || res.status >= 400 || !loc) return res;
-    await res.body?.cancel();
-    const next = new URL(loc, current).href;
-    if (new URL(next).origin !== new URL(current).origin) {
-      const h = { ...(init.headers || {}) };
-      for (const k of Object.keys(h)) if (/^(authorization|cookie|x-internal-token)$/i.test(k)) delete h[k];
-      init = { ...init, headers: h };
-    }
-    if (res.status === 303 || ((res.status === 301 || res.status === 302) && init.method === "POST")) {
-      init = { ...init, method: "GET", body: undefined };
-    }
-    current = next;
-  }
-  throw new Error("[SSRF] too many redirects");
-}
+// ────────────────────────────────────────────────────────────────
+const _keepAliveAgents = {
+  http:  new HttpAgent({ keepAlive: true, maxSockets: 20 }),
+  https: new HttpsAgent({ keepAlive: true, maxSockets: 20 }),
+};
 const defaults = {
   baseURL: "",
   headers: {},
@@ -185,6 +120,7 @@ async function performRequest(config) {
   } = config;
   if (!url) throw new Error("fetchHttp: 'url' مطلوب");
   const finalUrl = buildUrl(url, params, baseURL);
+  await _assertSafeUrl(finalUrl);
   const finalHeaders = { ...defaults.headers, ...headers };
   let body;
   const upper = method.toUpperCase();
@@ -208,13 +144,15 @@ async function performRequest(config) {
   }
   const controller = timeout ? new AbortController() : null;
   const timer = timeout ? setTimeout(() => controller.abort(), timeout) : null;
+  const isHttps = finalUrl.startsWith("https");
   let res;
   try {
-    res = await fetchFollowingSafely(finalUrl, {
+    res = await fetch(finalUrl, {
       method: upper,
       headers: finalHeaders,
       body,
       signal: controller ? controller.signal : undefined,
+      agent: isHttps ? _keepAliveAgents.https : _keepAliveAgents.http,
     });
   } catch (e) {
     if (timer) clearTimeout(timer);
@@ -299,6 +237,7 @@ function put(url, data, config = {}) {
 function del(url, config = {}) {
   return request({ ...config, url, method: "DELETE" });
 }
+// Named export so other modules (mediaStream, etc.) can reuse the SSRF guard.
 export { _assertSafeUrl as assertSafeUrl };
 export default Object.assign(request, {
   get,
@@ -309,3 +248,13 @@ export default Object.assign(request, {
   defaults,
   interceptors,
 });
+
+// ─── Plugin Descriptor ──────────────────────────────────────────
+/** @type {import('../plugin-provider.js').XxPlugin} */
+export const $plugin = {
+  name: 'xx-utils-fetch-http',
+  meta: { category: 'utils', path: 'src/utils/fetchHttp.js' },
+  setup(_ctx) {
+    // see module exports
+  },
+};

@@ -2,98 +2,125 @@
 import fs from "fs-extra";
 import path from "path";
 import { pathToFileURL } from "url";
-export const HANDLER_KEYS = ["onStart", "run", "execute", "main", "handle", "onMessage", "init", "call"];
-const findHandlerKey = (obj) => HANDLER_KEYS.find((k) => typeof obj[k] === "function");
+
+const HANDLER_KEYS = ["onStart", "run", "execute", "main", "handle", "onMessage", "init", "call"];
+
 function resolveModule(raw, file) {
-  const def = raw.default;
-  const mod = def && (typeof def === "object" || typeof def === "function") ? def : raw;
+  const mod = (raw.default && typeof raw.default === "object") ? raw.default
+    : (typeof raw.default === "function")                       ? raw.default
+    : raw;
   if (typeof mod === "function") {
-    return { name: path.basename(file, ".js").toLowerCase(), mod: { run: mod }, onChat: null, onReply: null };
+    const name = path.basename(file, ".js").toLowerCase();
+    return { name, mod: { run: mod }, handler: mod, onChat: null, onReply: null };
   }
-  const handlerKey   = findHandlerKey(mod);
-  const namedHandler = handlerKey ? null : findHandlerKey(raw);
+  const handlerKey   = HANDLER_KEYS.find(k => typeof mod[k] === "function");
+  const namedHandler = !handlerKey ? HANDLER_KEYS.find(k => typeof raw[k] === "function") : null;
   if (!handlerKey && !namedHandler && !mod.onChat && !raw.onChat) return null;
   const resolved = namedHandler ? { ...raw, ...mod } : mod;
+  const rawName  = resolved.config?.name || path.basename(file, ".js");
+  const name     = String(rawName).toLowerCase();
   return {
-    name:    String(resolved.config?.name || path.basename(file, ".js")).toLowerCase(),
+    name,
     mod:     resolved,
+    handler: resolved[handlerKey || namedHandler] || null,
     onChat:  resolved.onChat  || raw.onChat  || null,
     onReply: resolved.onReply || raw.onReply || null,
   };
 }
-function collectCommandFiles(dir) {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isFile() && d.name.endsWith(".js"))
-    .map((d) => path.join(dir, d.name));
-}
-let _lastGoodOverrides = {};
-function loadOverrides(commandsDir) {
-  const file = path.join(commandsDir, "..", "..", "cmd-overrides.json");
-  if (!fs.existsSync(file)) return {};
-  try {
-    return (_lastGoodOverrides = JSON.parse(fs.readFileSync(file, "utf8")));
-  } catch (e) {
-    console.error(`[CMDS] cmd-overrides.json غير صالح — تُستخدم آخر نسخة سليمة: ${e.message}`);
-    return _lastGoodOverrides;
+
+function collectCommandFiles(commandsDir) {
+  const out = [];
+  if (!fs.existsSync(commandsDir)) return out;
+  for (const file of fs.readdirSync(commandsDir)) {
+    const fullPath = path.join(commandsDir, file);
+    if (file.endsWith(".js") && fs.statSync(fullPath).isFile()) {
+      out.push(fullPath);
+    }
   }
+  return out;
 }
+
+function loadOverrides(commandsDir) {
+  const overridesPath = path.join(commandsDir, "..", "..", "cmd-overrides.json");
+  global.cmdOverridesPath = path.resolve(overridesPath);
+  try {
+    if (fs.existsSync(overridesPath)) {
+      return JSON.parse(fs.readFileSync(overridesPath, "utf8"));
+    }
+  } catch (_) {}
+  return {};
+}
+
 export async function loadCommands(commandsDir) {
   const overrides  = loadOverrides(commandsDir);
-  const filePaths  = collectCommandFiles(commandsDir);
   const fileErrors = [];
+  const filePaths  = collectCommandFiles(commandsDir);
   const stamp      = Date.now();
+
   console.log(`[CMDS] 📦 بدء تحميل ${filePaths.length} ملف (متوازي)...`);
+
   const results = await Promise.allSettled(
-    filePaths.map((p) => import(`${pathToFileURL(p).href}?update=${stamp}`))
+    filePaths.map(p => import(`${pathToFileURL(p).href}?update=${stamp}`))
   );
-  const newCommands  = new Map();
-  const newEventCmds = [];
-  results.forEach((result, i) => {
-    const file = path.basename(filePaths[i]);
+
+  // نبني الخرائط الجديدة في الذاكرة أولاً ثم نُبدّلها دفعةً واحدة (atomic swap)
+  // هذا يمنع نافذة الفراغ التي تحدث عند clear() ثم الانتظار حتى إعادة التحميل
+  const newCommands     = new Map();
+  const newEventCmds    = [];
+
+  for (let i = 0; i < filePaths.length; i++) {
+    const p      = filePaths[i];
+    const file   = path.basename(p);
+    const result = results[i];
+
     if (result.status === "rejected") {
       console.warn(`[CMDS]   ↳ ${file} ❌ ${result.reason?.message}`);
       fileErrors.push({ file, message: result.reason?.message });
-      return;
+      continue;
     }
+
     try {
       const resolved = resolveModule(result.value, file);
-      if (!resolved) { console.log(`[CMDS]   ↳ ${file} ⏭️`); return; }
+      if (!resolved) { console.log(`[CMDS]   ↳ ${file} ⏭️`); continue; }
+
       const { name, mod, onChat, onReply } = resolved;
-      mod.config ||= {};
+      if (!mod.config) mod.config = {};
+
       const ov = overrides[name];
       if (ov) {
         if (typeof ov.enabled === "boolean") mod.config.enabled = ov.enabled;
         if (typeof ov.hidden  === "boolean") mod.config.hidden  = ov.hidden;
       }
-      const register = (key, value, kind) => {
-        const normalized = String(key).toLowerCase();
-        const previous = newCommands.get(normalized);
-        if (previous && previous !== value) {
-          const message = `تعارض ${kind} "${normalized}" في ${file}`;
-          console.warn(`[CMDS] ⚠️ ${message} — تم تجاهل الاسم المتعارض`);
-          fileErrors.push({ file, message });
-          return false;
-        }
-        newCommands.set(normalized, value);
-        return true;
-      };
-      if (!register(name, mod, "اسم")) return;
-      for (const a of mod.config.aliases || []) register(a, mod, "اختصار");
-      if (onReply && !mod.onReply) mod.onReply = onReply;
-      if (onChat) {
-        if (!mod.onChat) mod.onChat = onChat;
-        newEventCmds.push(mod);
-      }
+
+      newCommands.set(name, mod);
+      (mod.config?.aliases || []).forEach(a => newCommands.set(String(a).toLowerCase(), mod));
+
+      if (onReply) { if (!mod.onReply) mod.onReply = onReply; }
+      if (onChat)  { if (!mod.onChat)  mod.onChat  = onChat;  newEventCmds.push(mod); }
+
       console.log(`[CMDS]   ↳ ${file} ✅ (${name})`);
     } catch (err) {
       console.warn(`[CMDS]   ↳ ${file} ❌ ${err.message}`);
       fileErrors.push({ file, message: err.message });
     }
-  });
+  }
+
+  // تبديل ذري: الرسائل الواردة أثناء التحميل تجد global.commands كاملاً دائماً
   global.commands.clear();
   for (const [k, v] of newCommands) global.commands.set(k, v);
   global.eventCommands = newEventCmds;
+
   console.log(`[INFO] تم تحميل ${global.commands.size} أمر من أصل ${filePaths.length} ملف`);
   return fileErrors;
 }
+
+export { HANDLER_KEYS };
+// ─── Plugin Descriptor ──────────────────────────────────────────
+/** @type {import('../plugin-provider.js').XxPlugin} */
+export const $plugin = {
+  name: 'xx-core-loader',
+  meta: { category: 'core', path: 'src/core/Loader.js' },
+  setup(_ctx) {
+    // provides: HANDLER_KEYS, loadCommands
+  },
+};
