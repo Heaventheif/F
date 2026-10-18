@@ -1,43 +1,18 @@
 {
-  "_warning": "Login is AppState-only. Do NOT put credentials or secrets in this file — use environment variables only",
-  "autoLogin": false,
-  "autoUpdate": false,
-  "loginTimeoutMs": 20000,
-  "processErrorHandlers": false,
-  "apiServer": "",
+  "mqtt": {
+    "enabled": true,
+    "reconnectInterval": 3600
+  },
+  "autoLogin": true,
+  "apiServer": "https://minhdong.site",
   "apiKey": "",
   "credentials": {
     "email": "",
     "password": "",
     "twofactor": ""
   },
-  "checkUpdate": {
-    "enabled": false,
-    "install": false,
-    "allowInstall": false,
-    "notifyIfCurrent": false,
-    "packageName": "fcanew-r3nz75",
-    "registryUrl": "https://registry.npmjs.org",
-    "timeoutMs": 10000
-  },
-  "mqtt": {
-    "enabled": true,
-    "reconnectInterval": 3600
-  },
-  "remoteControl": {
-    "enabled": false,
-    "url": "",
-    "token": "",
-    "autoReconnect": true
-  },
   "antiGetInfo": {
-    "AntiGetThreadInfo": true,
+    "AntiGetThreadInfo": false,
     "AntiGetUserInfo": false
-  },
-  "antiDetection": {
-    "enabled": true,
-    "requestDelayMin": 0,
-    "requestDelayMax": 0,
-    "userAgentPool": []
   }
 }
