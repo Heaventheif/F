@@ -33,5 +33,5 @@
     "request": "npm:@cypress/request@4.0.1",
     "tough-cookie": "^4.1.4",
     "ws": "^8.21.3"
-  },
+  }
 }
