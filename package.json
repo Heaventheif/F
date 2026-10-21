@@ -16,6 +16,8 @@
     "cheerio": "^1.2.0"
   },
   "dependencies": {
+    "@bochilteam/scraper": "^6.0.9",
+    "axios": "^1.7.9",
     "bing-translate-api": "^4.2.0",
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
