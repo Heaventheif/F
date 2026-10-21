@@ -3,7 +3,7 @@ import fs from "fs-extra";
 import os from "os";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { tiktok } from "shadowx-tiksr";
+import ShadowXTikSR from "shadowx-tiksr";
 import { downloadAndSend as ytdlpDownload } from "./autodl.js";
 
 const HELP =
@@ -12,16 +12,16 @@ const HELP =
   "fyp fyp                  — فيديو عشوائي (FYP)\n\n" +
   "(أو تيك_توك بدل fyp)";
 
+// shadowx-tiksr: module.exports = class ShadowXTikSR { ... }، مع module.exports.default = new ShadowXTikSR()
+const tiktokClient = ShadowXTikSR?.default ?? new ShadowXTikSR();
+
 const RANDOM_TERMS = ["fyp", "viral", "trending", "funny", "foryou"];
 const cleanTemp = (p) => p && fs.remove(p).catch(() => {});
-const PAGE_URL_KEYS = ["url", "link", "webVideoUrl", "share_url", "shareUrl"];
-const pageUrlOf = (v) => PAGE_URL_KEYS.map((k) => v?.[k]).find(Boolean) || null;
 
-/* ───────────────── بحث عبر shadowx-tiksr (الطريقة الأساسية) ───────────────── */
+/* ───────────────── بحث عبر shadowx-tiksr (يرجع نتيجة واحدة) ───────────────── */
 async function searchVideo(query) {
   try {
-    const results = await tiktok.search(query);
-    return results?.[0] || null;
+    return await tiktokClient.search(query);
   } catch (e) {
     console.error("❌ [fyp] خطأ في البحث:", e.message);
     return null;
@@ -29,18 +29,13 @@ async function searchVideo(query) {
 }
 
 async function randomVideo() {
-  try {
-    const term = RANDOM_TERMS[Math.floor(Math.random() * RANDOM_TERMS.length)];
-    const results = await tiktok.search(term);
-    if (!results?.length) return null;
-    return results[Math.floor(Math.random() * results.length)];
-  } catch (e) {
-    console.error("❌ [fyp] خطأ في الفيديو العشوائي:", e.message);
-    return null;
-  }
+  const term = RANDOM_TERMS[Math.floor(Math.random() * RANDOM_TERMS.length)];
+  return searchVideo(term);
 }
 
-/* ───────────────── تحميل مباشر لرابط CDN (play/download) ───────────────── */
+const videoUrlOf = (v) => v?.downloads?.video || v?.video?.play_url || null;
+
+/* ───────────────── تحميل مباشر، مع تحويل لـ ytdlp API عند الفشل ───────────────── */
 async function downloadDirect(api, threadID, messageID, videoUrl) {
   const filePath = path.join(os.tmpdir(), `tiktok_${Date.now()}_${randomUUID()}.mp4`);
   try {
@@ -62,7 +57,7 @@ export default {
   config: {
     name: "fyp",
     aliases: ["تيك_توك"],
-    version: "2.1.0",
+    version: "3.0.0",
     role: 0,
     countDown: 5,
     category: "وسائط وتحميل",
@@ -79,7 +74,7 @@ export default {
 
     const raw = args.join(" ").trim();
 
-    // رابط مباشر → ytdlp API مباشرة (نفس آلية autodl.js)، بدون المرور بالبحث
+    // رابط مباشر → ytdlp API مباشرة (نفس آلية autodl.js)
     if (/^https?:\/\//i.test(raw)) {
       const ok = await ytdlpDownload(api, event, raw, "video");
       if (!ok) await message.reply("❌ تعذّر تحميل الفيديو.");
@@ -90,14 +85,11 @@ export default {
     const video = wantRandom ? await randomVideo() : await searchVideo(raw);
     if (!video) return message.reply("❌ لا توجد نتائج.");
 
-    const directUrl = video.play || video.download;
-    let sent = directUrl ? await downloadDirect(api, threadID, messageID, directUrl) : false;
+    const url = videoUrlOf(video);
+    if (!url) return message.reply("❌ لا يوجد رابط فيديو صالح.");
 
-    if (!sent) {
-      const pageUrl = pageUrlOf(video);
-      if (pageUrl) sent = await ytdlpDownload(api, event, pageUrl, "video");
-    }
-
+    let sent = await downloadDirect(api, threadID, messageID, url);
+    if (!sent) sent = await ytdlpDownload(api, event, url, "video");
     if (!sent) await message.reply("❌ تعذّر تحميل الفيديو.");
   },
 };
