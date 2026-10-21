@@ -16,8 +16,6 @@
     "cheerio": "^1.2.0"
   },
   "dependencies": {
-    "@bochilteam/scraper": "^5.0.0",
-    "axios": "^1.7.9",
     "bing-translate-api": "^4.2.0",
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
@@ -26,6 +24,7 @@
     "google-translate-api-x": "^10.7.3",
     "mongoose": "^9.7.4",
     "request": "npm:@cypress/request@4.0.1",
+    "shadowx-tiksr": "^1.1.0",
     "@vreden/youtube_scraper": "^1.2.9"
   },
   "_hardened": "fcanew-r3nz75 merged v4.0 — secureStore+mergeOnSave+rateLimiter+fca-lifecycle+monitor"
