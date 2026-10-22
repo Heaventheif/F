@@ -1,5 +1,6 @@
 "use strict";
 import { Innertube } from "youtubei.js";
+import { rm } from "node:fs/promises";
 import {
   getApiUrl,
   downloadYoutubeAudio,
@@ -49,3 +50,41 @@ export async function download(videoId) {
   const media = await downloadYoutubeAudio(`https://music.youtube.com/watch?v=${videoId}`, "m4a");
   return media.filePath;
 }
+
+export default {
+  config: {
+    name: "ytmp3",
+    version: "1.0.0",
+    role: 0,
+    countDown: 4,
+    category: "وسائط وتحميل",
+    description: "تحميل صوت MP3 من YouTube أو رابط صوتي عبر yy",
+    usage: [
+      "{pn}ytmp3 <اسم الأغنية> — البحث وتنزيل أول نتيجة كـMP3",
+      "{pn}ytmp3 <رابط YouTube أو SoundCloud> — تنزيل الصوت",
+    ],
+  },
+
+  onStart: async ({ api, message, args, event }) => {
+    const query = (args || []).join(" ").trim();
+    if (!query) return message.reply("الاستخدام: ytmp3 <اسم الأغنية أو رابط YouTube/SoundCloud>");
+
+    let filePath = null;
+    try {
+      getApiUrl();
+      let sourceUrl = query;
+      if (!/^https?:\/\//i.test(query)) {
+        const [first] = await search(query, 1);
+        if (!first?.videoId) throw new Error("لم أجد نتيجة بحث.");
+        sourceUrl = `https://www.youtube.com/watch?v=${first.videoId}`;
+      }
+      filePath = await downloadAudio(sourceUrl, "mp3");
+      await global.mediaSendFile(api, filePath, event.threadID, event.messageID);
+    } catch (error) {
+      console.error("[ytmp3]", error?.message || error);
+      await message.reply(`❌ تعذّر تنزيل الصوت: ${String(error?.message || "خطأ غير معروف").slice(0, 220)}`);
+    } finally {
+      if (filePath) await rm(filePath, { force: true }).catch(() => {});
+    }
+  },
+};
