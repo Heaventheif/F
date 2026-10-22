@@ -1,24 +1,20 @@
 "use strict";
-import http from "../utils/fetchHttp.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import fs from "fs-extra";
 import os from "os";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { pipeline } from "node:stream/promises";
+import { youtubeMusicSearch } from "@hydralerne/youtube-api";
 
-const BROWSER_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-    "AppleWebKit/537.36 (KHTML, like Gecko) " +
-    "Chrome/125.0.0.0 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
-};
+const execFileAsync = promisify(execFile);
+
 const TRACK_EMOJIS = ["👍", "❤️", "😆", "😮", "😢", "😡", "🥰", "🤩"];
 const LIST_SIZE = 7;
 const LIST_TTL_MS = 120_000;
-const CLIENT_ID_TTL_MS = 12 * 60 * 60 * 1000;
+
 const HELP =
-  "🎵 SoundCloud\n\n" +
+  "🎵 YouTube Music\n\n" +
   "song <اسم الأغنية>      — تشغيل أول نتيجة مباشرة\n" +
   "song s <اسم الأغنية>    — عرض قائمة للاختيار\n" +
   "(أو موسيقى بدل song)\n\n" +
@@ -26,119 +22,45 @@ const HELP =
   "song after the dark mr kitty\n" +
   "song s mr kitty";
 
-const isStale = (err) => [401, 404].includes(err?.response?.status);
 const cleanTemp = (p) => fs.remove(p).catch(() => {});
-
-// ─── client_id ──────────────────────────────────────────────────
-let _clientId = null;
-let _clientExp = 0;
-
-async function fetchClientId() {
-  const page = await http.get("https://soundcloud.com", { headers: BROWSER_HEADERS, timeout: 15000 });
-  const scriptUrls = [...page.data.matchAll(/https:\/\/a-v2\.sndcdn\.com\/[^"]+\.js/g)].map(m => m[0]);
-  if (!scriptUrls.length) throw new Error("لم تُوجد سكريبتات SoundCloud");
-  // الحزمة الرئيسية (فيها client_id) تُحمَّل آخراً، فنبدأ من الأخيرة
-  for (const url of scriptUrls.slice(-8).reverse()) {
-    try {
-      const { data } = await http.get(url, { headers: BROWSER_HEADERS, timeout: 10000 });
-      const match =
-        data.match(/[{,]client_id:"([a-zA-Z0-9]{20,40})"/) ||
-        data.match(/"client_id"\s*:\s*"([a-zA-Z0-9]{20,40})"/) ||
-        data.match(/client_id\s*=\s*"([a-zA-Z0-9]{20,40})"/);
-      if (match) return match[1];
-    } catch (_) {}
-  }
-  throw new Error("فشل استخراج client_id من SoundCloud");
-}
-
-// forceRefresh=true يتجاوز الكاش (مثلاً بعد 401/404 من الـ API)
-async function getClientId(forceRefresh = false) {
-  if (!forceRefresh && _clientId && Date.now() < _clientExp) return _clientId;
-  _clientId = await fetchClientId();
-  _clientExp = Date.now() + CLIENT_ID_TTL_MS;
-  return _clientId;
-}
-getClientId().catch(() => {}); // تسخين عند التحميل
 
 // ─── بحث ────────────────────────────────────────────────────────
 async function searchTracks(query, limit) {
-  const doSearch = async (forceRefresh) => {
-    const client_id = await getClientId(forceRefresh);
-    const res = await http.get("https://api-v2.soundcloud.com/search/tracks", {
-      params: {
-        q: query, client_id, limit,
-        offset: 0, linked_partitioning: 1,
-        app_version: "1733219585", app_locale: "en",
-      },
-      headers: BROWSER_HEADERS,
-      timeout: 15000,
-    });
-    const tracks = res.data?.collection;
-    if (!tracks?.length) throw new Error("لم تُوجد نتائج على SoundCloud");
-    return tracks;
-  };
-  try {
-    return await doSearch(false);
-  } catch (err) {
-    if (isStale(err)) return doSearch(true); // client_id قديم
-    throw err;
-  }
+  const results = await youtubeMusicSearch(query, "songs");
+  if (!Array.isArray(results) || !results.length)
+    throw new Error("لم تُوجد نتائج على YouTube Music");
+  return results.slice(0, limit);
 }
 
-// ─── تحميل ──────────────────────────────────────────────────────
-async function resolveStreamUrl(transcodingUrl, trackAuthorization, forceRefresh) {
-  const client_id = await getClientId(forceRefresh);
-  const res = await http.get(transcodingUrl, {
-    params: { client_id, track_authorization: trackAuthorization },
-    headers: BROWSER_HEADERS,
-    timeout: 15000,
-  });
-  if (!res.data?.url) throw new Error("فشل استخراج رابط البث");
-  return res.data.url;
-}
+// ─── تحميل عبر yt-dlp ──────────────────────────────────────────
+async function downloadToTemp(videoId) {
+  const url = `https://music.youtube.com/watch?v=${videoId}`;
+  const filePath = path.join(os.tmpdir(), `yt_${Date.now()}_${randomUUID()}.mp3`);
 
-async function downloadToTemp(streamUrl) {
-  const filePath = path.join(os.tmpdir(), `sc_${Date.now()}_${randomUUID()}.mp3`);
   try {
-    const res = await http.get(streamUrl, { responseType: "stream", headers: BROWSER_HEADERS, timeout: 60000 });
-    await pipeline(res.data, fs.createWriteStream(filePath));
-    if (!(await fs.stat(filePath)).size) throw new Error("ملف الصوت فارغ");
+    await execFileAsync("yt-dlp", [
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "0",
+      "-o", filePath,
+      "--no-playlist",
+      "--no-warnings",
+      url,
+    ], { timeout: 90_000 });
+
+    const stat = await fs.stat(filePath);
+    if (!stat.size) throw new Error("ملف الصوت فارغ");
     return filePath;
   } catch (err) {
     await cleanTemp(filePath);
-    throw err;
+    throw new Error(`فشل التحميل: ${err.message?.substring(0, 200) || "yt-dlp error"}`);
   }
-}
-
-// ترتيب الأفضلية: كامل-progressive، كامل-hls، مقتطع-progressive، مقتطع-hls، ثم الباقي
-const RANK = { progressive: [0, 2], hls: [1, 3] };
-const rank = (t) => RANK[t.format?.protocol]?.[t.snipped ? 1 : 0] ?? 4;
-
-async function streamTrack(track) {
-  const byUrl = new Map((track.media?.transcodings ?? []).filter(t => t.url).map(t => [t.url, t]));
-  const candidates = [...byUrl.values()].sort((a, b) => rank(a) - rank(b));
-  if (!candidates.length) throw new Error("لا يوجد بث متاح لهذا المقطع");
-
-  const trackAuth = track.track_authorization ?? "";
-  const errors = [];
-  for (const pick of candidates) {
-    // محاولة ثانية بـ client_id جديد فقط إذا رُفض الأول (401/404)
-    for (const refresh of [false, true]) {
-      try {
-        return await downloadToTemp(await resolveStreamUrl(pick.url, trackAuth, refresh));
-      } catch (err) {
-        errors.push(`${pick.format?.protocol}: ${err.message}`);
-        if (!isStale(err)) break;
-      }
-    }
-  }
-  throw new Error("فشل تشغيل المقطع: " + errors.slice(-3).join(" | "));
 }
 
 async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
   let filePath = null;
   try {
-    filePath = await streamTrack(track);
+    filePath = await downloadToTemp(track.videoId);
     await global.mediaSendFile(api, filePath, threadID, messageID);
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
   } finally {
@@ -156,10 +78,10 @@ function fmtDuration(ms) {
 async function showTrackList(api, event, list) {
   const { threadID, messageID } = event;
   const line = "─".repeat(22);
-  let text = `🎵 نتائج البحث في SoundCloud:\n${line}\n`;
+  let text = `🎵 نتائج البحث في YouTube Music:\n${line}\n`;
   list.forEach((t, i) => {
     text += `${TRACK_EMOJIS[i]} ${t.title || "بدون عنوان"}\n`;
-    text += `   👤 ${t.user?.username || ""} ${fmtDuration(t.full_duration || t.duration)}\n${line}\n`;
+    text += `   👤 ${t.artist || ""} ${fmtDuration(t.duration)}\n${line}\n`;
   });
   text += "تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين";
 
@@ -185,11 +107,11 @@ export default {
   config: {
     name:        "song",
     aliases:     ["موسيقى"],
-    version:     "1.0.0",
+    version:     "2.0.0",
     role:        0,
     countDown:   0,
     category: "وسائط وتحميل",
-    description: "بحث وتشغيل مقاطع من SoundCloud — أضف s لعرض قائمة نتائج",
+    description: "بحث وتشغيل مقاطع من YouTube Music — أضف s لعرض قائمة نتائج",
     usage: [
       "{pn}song <اسم> — تشغيل أول نتيجة مباشرة",
       "{pn}song s <اسم> — عرض قائمة نتائج للاختيار",
@@ -207,11 +129,11 @@ export default {
 
     try {
       const tracks = await searchTracks(query, showList ? LIST_SIZE : 1);
-      if (showList) await showTrackList(api, event, tracks.slice(0, LIST_SIZE));
+      if (showList) await showTrackList(api, event, tracks);
       else await sendTrack(api, threadID, messageID, tracks[0]);
     } catch (err) {
-      console.error("[sc] خطأ:", err.message);
+      console.error("[yt-music] خطأ:", err.message);
       global.safeSend(api, `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
     }
   },
-};
+};   
