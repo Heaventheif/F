@@ -1,6 +1,7 @@
 "use strict";
 import fs from "fs-extra";
-import { downloadYYMedia, getApiUrl, getTiktokApiUrl } from "../utils/yyApi.js";
+import { getTiktokApiUrl } from "../utils/yyApi.js";
+import { downloadTikTok } from "../utils/tiktokDownloader.js";
 
 const HELP =
   "📺 تيك توك\n\n" +
@@ -31,7 +32,7 @@ async function searchVideo(query) {
     throw new Error(errorMessage || `TikTok Search API: HTTP ${response.status}`);
   }
   // tS's `format=urls` returns one URL per line. limit=1 ensures we only fetch
-  // and pass the first result to yy, never the full JSON result object.
+  // and pass the first result to the downloader, never the full JSON result object.
   const firstUrl = body.split(/\r?\n/).map(line => line.trim()).find(line => /^https?:\/\//i.test(line));
   return firstUrl ? { url: firstUrl } : null;
 }
@@ -44,7 +45,7 @@ async function randomVideo() {
 async function downloadAndSend(api, threadID, messageID, url) {
   let filePath;
   try {
-    const media = await downloadYYMedia(url, { type: "video" });
+    const media = await downloadTikTok(url);
     filePath = media.filePath;
     await global.mediaSendFile(api, filePath, threadID, messageID);
     return true;
@@ -55,9 +56,6 @@ async function downloadAndSend(api, threadID, messageID, url) {
 
 function userError(error) {
   const detail = String(error?.message || "").slice(0, 350);
-  if (error?.code === "source_forbidden" || detail.includes("source_forbidden")) {
-    return `❌ رفضت TikTok تنزيل هذا الفيديو (HTTP 403 من المصدر). قد يكون خاصًا أو محميًا أو أن خادم yy السحابي غير مسموح له؛ لا يمكن تجاوز رفض المنصة.\n${detail}`;
-  }
   return `❌ تعذّر تحميل الفيديو: ${detail || "خطأ غير معروف"}`;
 }
 
@@ -69,7 +67,7 @@ export default {
     role: 0,
     countDown: 5,
     category: "وسائط وتحميل",
-    description: "بحث فيديوهات TikTok عبر tS وتنزيلها عبر yy.",
+    description: "بحث فيديوهات TikTok عبر tS وتنزيلها عبر Toshiro.",
     usage: [
       "{pn}fyp <كلمة بحث أو رابط> — تحميل أول نتيجة",
       "{pn}fyp fyp — فيديو عشوائي",
@@ -83,8 +81,7 @@ export default {
     const raw = args.join(" ").trim();
     const isUrl = /^https?:\/\//i.test(raw);
     try {
-      // التحقق من تهيئة الخدمتين قبل بدء البحث أو التنزيل.
-      getApiUrl();
+      // التحقق من خدمة البحث قبل طلب النتائج؛ التنزيل يمر عبر Toshiro.
       if (!isUrl) getTiktokApiUrl();
 
       let videoUrl = raw;
