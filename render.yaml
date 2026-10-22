@@ -54,8 +54,9 @@ services:
       # 0 = أسرع. إن تكررت رسالة "returned no metadata/ids" جرّب 400.
       - key: MEDIA_GAP_MS
         value: "0"
-      # yt-dlp API endpoint and secret key
-      - key: YTDLP_URL
-        value: https://ytdlp-api-gukc.onrender.com
-      - key: YTDLP_KEY
-        sync: false
+      # Downloader API hosted by the yy repository
+      - key: API_URL
+        value: https://yy-two-ruddy.vercel.app
+      # TikTok search API hosted by the tS repository
+      - key: TIKTOK_API
+        value: https://heaventheif-ts.vercel.app

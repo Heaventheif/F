@@ -1,12 +1,10 @@
 "use strict";
-import fs from "fs-extra";
-import os from "os";
-import path from "path";
 import http from "./fetchHttp.js";
 import vreden from "@vreden/youtube_scraper";
-import { randomUUID } from "node:crypto";
-import { pipeline } from "node:stream/promises";
 import { downloadFromXalman } from "./xalmanApi.js";
+import { downloadYoutubeAudio, downloadYoutubeMp4 } from "./yyApi.js";
+import { removeTempFile, streamToTempFile as writeStreamToTempFile } from "./mediaFile.js";
+import { buildYozoraDownloadUrl, getYozoraEntries, getYozoraInfo, getYozoraTitle } from "./yozora.js";
 
 const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
 const MAX_SEARCH_CACHE_ENTRIES = 100;
@@ -40,21 +38,13 @@ function writeSearchCache(key, results) {
 }
 
 async function streamToTempFile(url, prefix, ext) {
-  const filePath = path.join(os.tmpdir(), `${prefix}_${Date.now()}_${randomUUID()}.${ext}`);
-  try {
-    const response = await http.get(url, {
-      responseType: "stream",
-      timeout: 120000,
-      headers: { Accept: "video/mp4,audio/mpeg,*/*", "User-Agent": "Mozilla/5.0" },
-    });
-    await pipeline(response.data, fs.createWriteStream(filePath));
-    const stat = await fs.stat(filePath);
-    if (stat.size === 0) throw new Error("الملف فارغ.");
-    return filePath;
-  } catch (error) {
-    await fs.remove(filePath).catch(() => {});
-    throw error;
-  }
+  const response = await http.get(url, {
+    responseType: "stream",
+    timeout: 120000,
+    headers: { Accept: "video/mp4,audio/mpeg,*/*", "User-Agent": "Mozilla/5.0" },
+  });
+  const media = await writeStreamToTempFile(response.data, { prefix, ext });
+  return media.filePath;
 }
 
 function normalizeSearchResult(item) {
@@ -154,6 +144,51 @@ const ytDlpStreamProvider = {
   },
 };
 
+function normalizeYoutubeUrl(rawUrl) {
+  const raw = String(rawUrl || "").trim();
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    let videoId = host === "youtu.be" ? url.pathname.split("/").filter(Boolean)[0] : url.searchParams.get("v");
+    if (!videoId && host.endsWith("youtube.com")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const index = parts.findIndex(part => ["shorts", "embed", "live", "v"].includes(part));
+      if (index >= 0) videoId = parts[index + 1];
+    }
+    return videoId ? `https://www.youtube.com/watch?v=${videoId}` : raw;
+  } catch {
+    return raw;
+  }
+}
+
+const yozoraProvider = {
+  name: "yozora",
+  async search(query, limit = 10) {
+    const info = await getYozoraInfo(`ytsearch${Math.max(1, limit)}:${query}`);
+    const results = getYozoraEntries(info, limit).map(normalizeSearchResult).filter(Boolean);
+    if (!results.length) throw new Error("لا توجد نتائج من Yozora");
+    return results;
+  },
+  async download(url, wantMp4) {
+    const normalized = normalizeYoutubeUrl(url);
+    const format = wantMp4 ? "bestvideo+bestaudio/best" : "bestaudio/best";
+    const info = await getYozoraInfo(normalized, format);
+    const title = getYozoraTitle(info, wantMp4 ? "video" : "audio");
+    const ext = wantMp4 ? "mp4" : "mp3";
+    const response = await http.get(buildYozoraDownloadUrl(normalized, format), {
+      responseType: "stream",
+      timeout: 5 * 60 * 1000,
+      headers: { Accept: "video/mp4,audio/mpeg,*/*", "User-Agent": "SunkenBot/4.0" },
+    });
+    const media = await writeStreamToTempFile(response.data, { prefix: "yozora_yt", ext, title });
+    return {
+      ...media,
+      duration: Number(info?.duration) || 0,
+      uploader: info?.uploader || info?.channel || "",
+    };
+  },
+};
+
 const xalmanProvider = {
   name: "xalman-api",
   async download(url, wantMp4) {
@@ -161,7 +196,17 @@ const xalmanProvider = {
   },
 };
 
-const providers = [xalmanProvider, vredenProvider, ytDlpStreamProvider];
+const yyProvider = {
+  name: "yy-api",
+  async download(url, wantMp4, { maxHeight = 360 } = {}) {
+    return wantMp4
+      ? downloadYoutubeMp4(url, maxHeight)
+      : downloadYoutubeAudio(url, "mp3");
+  },
+};
+
+// yy is the primary downloader; other providers remain hedged fallbacks.
+const providers = [yyProvider, xalmanProvider, vredenProvider, ytDlpStreamProvider, yozoraProvider];
 
 export { providers };
 
@@ -200,7 +245,7 @@ export async function searchWithFallback(query, limit = 10) {
 // يحلّ مشكلة خوادم Render التي "تنام" وتستغرق دقيقة+ قبل أن نجرّب البديل.
 const HEDGE_MS = Math.max(500, Number.parseInt(process.env.YT_HEDGE_MS || "", 10) || 4000);
 
-export function downloadWithFallback(url, wantMp4) {
+export function downloadWithFallback(url, wantMp4, options = {}) {
   return new Promise((resolve, reject) => {
     const errors = [];
     const started = new Set();
@@ -217,12 +262,18 @@ export function downloadWithFallback(url, wantMp4) {
         timers.add(t);
       }
       Promise.resolve()
-        .then(() => provider.download(url, wantMp4))
+        .then(() => provider.download(url, wantMp4, options))
         .then(async (result) => {
           if (settled) { await cleanTemp(result?.filePath); return; }
           settled = true;
           timers.forEach(clearTimeout);
-          resolve({ ...result, provider: provider.name });
+          resolve({
+            ...result,
+            title: result?.title || "YouTube media",
+            duration: Number(result?.duration) || 0,
+            uploader: result?.uploader || "",
+            provider: provider.name,
+          });
         })
         .catch((error) => {
           errors.push(`${provider.name}: ${error?.message || error}`);
@@ -241,9 +292,7 @@ export function downloadWithFallback(url, wantMp4) {
 }
 
 export async function cleanTemp(filePath) {
-  try {
-    if (filePath && await fs.pathExists(filePath)) await fs.remove(filePath);
-  } catch (_) {}
+  await removeTempFile(filePath);
 }
 
 // ─── Plugin Descriptor ──────────────────────────────────────────

@@ -1,11 +1,11 @@
 import fs from "fs-extra";
 import path from "node:path";
-import { downloadMedia } from "../utils/mediaApi.js";
+import { downloadYYMedia } from "../utils/yyApi.js";
 import { directSend, directSendParts } from "../utils/directSend.js";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
 
 const URL_RE = /https?:\/\/[^\s"'<>]+/i;
-const YTDLP_API_LABEL = "YTDLP API";
+const API_LABEL = "yy API";
 
 function extractUrl(text) {
   return String(text || "").match(URL_RE)?.[0]?.replace(/[.,)]+$/, "") || null;
@@ -57,12 +57,12 @@ async function downloadAndSend(api, event, url, type = "video") {
   const { threadID, messageID } = event;
   let media;
   try {
-    media = await downloadMedia(url, { type, q: type === "audio" ? 128 : 720 });
-    console.log(`[AUTODL] provider=${YTDLP_API_LABEL} type=${type} url=${url}`);
+    media = await downloadYYMedia(url, { type });
+    console.log(`[AUTODL] provider=${API_LABEL} type=${type} url=${url}`);
     return await sendLocalFile(api, threadID, media.filePath, media.title || "وسائط", messageID);
   } catch (error) {
     if (media?.filePath) await fs.remove(media.filePath).catch(() => {});
-    console.error(`[AUTODL:${YTDLP_API_LABEL}]`, error?.message || error);
+    console.error(`[AUTODL:${API_LABEL}]`, error?.message || error);
     return false;
   }
 }
@@ -81,10 +81,10 @@ export default {
     role: 0,
     countDown: 6,
     category: "وسائط وتحميل",
-    description: "تحميل الفيديو أو الصوت من رابط واحد عبر YTDLP API.",
+    description: "تحميل الفيديو أو الصوت من رابط واحد عبر API مشروع yy.",
     usage: [
-      "{pn}autodl <رابط> — تحميل فيديو عبر YTDLP API",
-      "{pn}autodl audio <رابط> — تحميل صوت عبر YTDLP API",
+      "{pn}autodl <رابط> — تحميل فيديو عبر API مشروع yy",
+      "{pn}autodl audio <رابط> — تحميل صوت عبر API مشروع yy",
       "أرسل الرابط مباشرة بدون أمر — اكتشاف وتحميل تلقائي"
     ],
     hidden: true
@@ -102,10 +102,10 @@ export default {
     const url = values.find(value => /^https?:\/\//i.test(String(value))) || extractUrl(values.join(" "));
     if (!url) return message.reply("📥 الاستخدام: autodl <رابط>\nوللصوت: autodl audio <رابط>");
 
-    const status = await sendStatus(api, event.threadID, `⏳ جاري التحميل عبر ${YTDLP_API_LABEL}...`, event.messageID);
+    const status = await sendStatus(api, event.threadID, `⏳ جاري التحميل عبر ${API_LABEL}...`, event.messageID);
     const ok = await downloadAndSend(api, event, url, type);
     if (status?.messageID) await api.unsendMessage(status.messageID, event.threadID).catch(() => {});
-    if (!ok) await message.reply("❌ تعذّر التحميل عبر YTDLP API، تأكد من الرابط وحاول لاحقاً.");
+    if (!ok) await message.reply("❌ تعذّر التحميل عبر API مشروع yy؛ تأكد أن الرابط عام ومسموح تنزيله وحاول لاحقاً.");
   }
 };
 

@@ -1,9 +1,11 @@
 "use strict";
-import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
 import * as ytmp3 from "./ytmp3.js";
 
-const BROWSER_HEADERS = ytmp3.BROWSER_HEADERS;
+const BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+};
 const TRACK_EMOJIS = ["👍", "❤️", "😆", "😮", "😢", "😡", "🥰", "🤩"];
 const LIST_SIZE = 7;
 const LIST_TTL_MS = 120_000;
@@ -103,7 +105,7 @@ async function search(query, limit) {
 }
 
 // ─── تنزيل ─────────────────────────────────────────────────────
-// SoundCloud عبر خدمة الـ API (تحويل إلى MP3 — يدعم مقاطع HLS أيضًا)
+// SoundCloud عبر yy /api/v1/audio (تحويل إلى MP3 — يدعم مقاطع HLS أيضًا)
 const downloadSC = (permalinkUrl) => ytmp3.downloadAudio(permalinkUrl, "mp3");
 
 // ─── إرسال المقطع ──────────────────────────────────────────────
@@ -191,11 +193,11 @@ export default {
   config: {
     name:        "song",
     aliases:     ["موسيقى"],
-    version:     "3.2.0",
+    version:     "3.3.0",
     role:        0,
     countDown:   0,
     category: "وسائط وتحميل",
-    description: "بحث وتشغيل مقاطع — SoundCloud أولاً، YouTube Music كاحتياطي",
+    description: "بحث وتشغيل مقاطع — SoundCloud أولاً، وYouTube Music احتياطيًا عبر API yy",
     usage: [
       "{pn}song <اسم> — تشغيل أول نتيجة مباشرة",
       "{pn}song s <اسم> — عرض قائمة نتائج للاختيار",

@@ -3,6 +3,7 @@ import fs from "fs";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "../utils/mediaSplitter.js";
 import { downloadToTemp } from "../utils/mediaStream.js";
 import { buildYozoraDownloadUrl, getYozoraEntries, getYozoraInfo } from "../utils/yozora.js";
+import { downloadYYMedia } from "../utils/yyApi.js";
 const TUMBLR_API_KEY = process.env.TUMBLR_API_KEY || "";
 const TIKTOK_INFO_TIMEOUT_MS = 15_000;
 const TIKTOK_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -114,6 +115,7 @@ async function tryTikTok() {
         const selected = chooseRandomUnseen(fresh, video => video.url, new Set());
         return {
           source: "tiktok",
+          sourceUrl: selected.url,
           videoUrl: buildYozoraDownloadUrl(selected.url),
           sentKey: `tiktok:${selected.url}`,
         };
@@ -133,6 +135,7 @@ async function tryTikTok() {
   const selected = chooseRandomUnseen(repeatPool, video => video.url, new Set());
   return {
     source: "tiktok",
+    sourceUrl: selected.url,
     videoUrl: buildYozoraDownloadUrl(selected.url),
     sentKey: `tiktok:${selected.url}`,
   };
@@ -200,10 +203,25 @@ export default {
       if (!picked) {
         return global.safeSend(api, "لم أجد فيديو الآن. حاول مرة أخرى لاحقاً.", threadID, null, messageID);
       }
-      const { videoUrl, sentKey } = picked;
-      const downloaded = await downloadToTemp(videoUrl, "mp4");
-      tmpFile = downloaded.tmpPath;
-      const size = downloaded.size;
+      const { videoUrl, sourceUrl, source: mediaSource, sentKey } = picked;
+      let size;
+      if (mediaSource === "tiktok") {
+        try {
+          const media = await downloadYYMedia(sourceUrl || videoUrl, { type: "video" });
+          tmpFile = media.filePath;
+          size = media.bytes;
+        } catch (yyError) {
+          console.warn(`[RANDOM] yy failed, using direct TikTok stream fallback: ${yyError.message}`);
+          const downloaded = await downloadToTemp(videoUrl, "mp4");
+          tmpFile = downloaded.tmpPath;
+          size = downloaded.size;
+        }
+      } else {
+        // Tumblr is not in yy's supported source list; keep its direct media URL path.
+        const downloaded = await downloadToTemp(videoUrl, "mp4");
+        tmpFile = downloaded.tmpPath;
+        size = downloaded.size;
+      }
       if (size < 10240) return global.safeSend(api, "الفيديو فارغ.", threadID, null, messageID);
       const files = NEEDS_SPLIT(size)
         ? (partPaths = await splitFile(tmpFile, "mp4"))

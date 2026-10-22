@@ -1,12 +1,11 @@
 "use strict";
 import fs from "fs-extra";
-import os from "os";
-import path from "path";
 import https from "https";
 import http from "http";
 import { splitFile, cleanupParts, NEEDS_SPLIT } from "./mediaSplitter.js";
 import { assertSafeUrl } from "./fetchHttp.js";
 import { directSend, directSendParts } from "./directSend.js";
+import { streamToTempFile } from "./mediaFile.js";
 // Hard cap: abort downloads that exceed this size to avoid OOM / disk exhaustion.
 // Facebook Messenger's max attachment is 25 MB; 200 MB covers legitimate large videos.
 const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
@@ -45,27 +44,13 @@ async function downloadToTemp(url, ext = "mp4") {
     throw new Error(`حجم الملف (${Math.round(contentLength / 1024 / 1024)}MB) يتجاوز الحد المسموح (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB)`);
   }
 
-  const tmpPath = path.join(os.tmpdir(), `media_${Date.now()}.${ext}`);
-  const writer = fs.createWriteStream(tmpPath);
-  let bytesReceived = 0;
-
-  await new Promise((resolve, reject) => {
-    stream.on("data", (chunk) => {
-      bytesReceived += chunk.length;
-      if (bytesReceived > MAX_DOWNLOAD_BYTES) {
-        stream.destroy();
-        writer.destroy();
-        fs.remove(tmpPath).catch(() => {});
-        reject(new Error(`الملف تجاوز الحد الأقصى (${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB) أثناء التحميل`));
-      }
-    });
-    stream.pipe(writer);
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-    stream.on("error", reject);
+  const media = await streamToTempFile(stream, {
+    prefix: "media",
+    ext,
+    totalBytes: contentLength || null,
+    maxBytes: MAX_DOWNLOAD_BYTES,
   });
-  const stat = await fs.stat(tmpPath);
-  return { tmpPath, size: stat.size, contentLength };
+  return { tmpPath: media.filePath, size: media.bytes, contentLength };
 }
 async function streamAndSend(api, threadID, mediaUrl, title, ext = "mp4", replyToID = undefined) {
   let tmpPath;

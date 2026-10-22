@@ -15,9 +15,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import fs                  from "fs-extra";
-import { createReadStream } from "node:fs";
-import { Readable }        from "node:stream";
-import { searchVideos, downloadAudio, downloadVideo } from "./utils/ytEngine.js";
+import { searchWithFallback, downloadWithFallback } from "./utils/ytProviders.js";
 
 // ── مقارنة توكن آمنة زمنياً (يُغلق timing-attack على /yt/*) ────────────────
 function safeTokenEqual(a, b) {
@@ -149,7 +147,7 @@ function startWebServer() {
           const query = (body?.query || "").trim();
           const limit = Math.min(parseInt(body?.limit || 10), 15);
           if (!query) return json({ error: "query مطلوب" }, 400);
-          const results = await searchVideos(query, limit);
+          const results = await searchWithFallback(query, limit);
           return json({ results });
         } catch (e) {
           console.error("[YT/search]", e.message);
@@ -166,7 +164,7 @@ function startWebServer() {
           const body = await req.json().catch(() => ({}));
           const url  = (body?.url || "").trim();
           if (!url) return json({ error: "url مطلوب" }, 400);
-          const dl   = await downloadAudio(url);
+          const dl   = await downloadWithFallback(url, false);
           tmpPath    = dl.filePath;
           return streamFile(tmpPath, {
             "Content-Type":        "audio/mpeg",
@@ -191,7 +189,7 @@ function startWebServer() {
           const body = await req.json().catch(() => ({}));
           const url  = (body?.url || "").trim();
           if (!url) return json({ error: "url مطلوب" }, 400);
-          const dl   = await downloadVideo(url);
+          const dl   = await downloadWithFallback(url, true, { maxHeight: 720 });
           tmpPath    = dl.filePath;
           return streamFile(tmpPath, {
             "Content-Type":        "video/mp4",

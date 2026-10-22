@@ -1,23 +1,6 @@
 "use strict";
 import fs from "fs-extra";
-import os from "os";
-import path from "path";
-import { randomUUID } from "node:crypto";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-
-// ─── الإعدادات من متغيرات البيئة ─────────────────────────────────
-// API_URL    : خدمة التنزيل      مثال: https://my-api.vercel.app
-// TIKTOK_API : خدمة بحث تيك توك   مثال: https://my-tiktok.vercel.app
-// (بدون / في النهاية)
-function envUrl(name) {
-  const url = (process.env[name] || "").trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(url))
-    throw new Error(`متغير البيئة ${name} غير مضبوط أو غير صالح`);
-  return url;
-}
-const getApiUrl = () => envUrl("API_URL");
-const getTiktokApi = () => envUrl("TIKTOK_API");
+import { downloadYYMedia, getApiUrl, getTiktokApiUrl } from "../utils/yyApi.js";
 
 const HELP =
   "📺 تيك توك\n\n" +
@@ -26,26 +9,31 @@ const HELP =
   "(أو تيك_توك بدل fyp)";
 
 const RANDOM_TERMS = ["fyp", "viral", "trending", "funny", "foryou"];
-const cleanTemp = (p) => p && fs.remove(p).catch(() => {});
 
-/* ───────────────── بحث عبر TikTok Search API ───────────────── */
 async function searchVideo(query) {
-  try {
-    const res = await fetch(
-      `${getTiktokApi()}/api/search?q=${encodeURIComponent(query)}&limit=1`
-    );
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body?.error || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    const first = data.videos?.[0];
-    if (!first) return null;
-    return { url: first.url, id: first.id, description: first.description, author: first.author };
-  } catch (e) {
-    console.error("❌ [fyp] خطأ في البحث:", e.message);
-    return null;
+  const endpoint = new URL(`${getTiktokApiUrl()}/api/search`);
+  endpoint.searchParams.set("q", query);
+  endpoint.searchParams.set("limit", "1");
+  endpoint.searchParams.set("format", "urls");
+  const headers = {};
+  if (process.env.TIKTOK_API_KEY?.trim()) {
+    headers["x-api-key"] = process.env.TIKTOK_API_KEY.trim();
   }
+
+  const response = await fetch(endpoint, {
+    headers,
+    signal: AbortSignal.timeout(75_000),
+  });
+  const body = await response.text().catch(() => "");
+  if (!response.ok) {
+    let errorMessage = body.slice(0, 300);
+    try { errorMessage = JSON.parse(body)?.error || errorMessage; } catch {}
+    throw new Error(errorMessage || `TikTok Search API: HTTP ${response.status}`);
+  }
+  // tS's `format=urls` returns one URL per line. limit=1 ensures we only fetch
+  // and pass the first result to yy, never the full JSON result object.
+  const firstUrl = body.split(/\r?\n/).map(line => line.trim()).find(line => /^https?:\/\//i.test(line));
+  return firstUrl ? { url: firstUrl } : null;
 }
 
 async function randomVideo() {
@@ -53,43 +41,35 @@ async function randomVideo() {
   return searchVideo(term);
 }
 
-/* ───────────────── تنزيل عبر API_URL ───────────────── */
 async function downloadAndSend(api, threadID, messageID, url) {
-  const filePath = path.join(os.tmpdir(), `tiktok_${Date.now()}_${randomUUID()}.mp4`);
+  let filePath;
   try {
-    const res = await fetch(`${getApiUrl()}/api/v1/download?url=${encodeURIComponent(url)}`, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`فشل التنزيل (HTTP ${res.status}): ${body.substring(0, 200)}`);
-    }
-
-    if (!res.body) throw new Error("استجابة بدون محتوى");
-    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(filePath));
-
-    if (!(await fs.stat(filePath)).size) throw new Error("الملف فارغ");
-
+    const media = await downloadYYMedia(url, { type: "video" });
+    filePath = media.filePath;
     await global.mediaSendFile(api, filePath, threadID, messageID);
     return true;
-  } catch (e) {
-    console.error("❌ [fyp] خطأ في التنزيل:", e.message);
-    return false;
   } finally {
-    await cleanTemp(filePath);
+    if (filePath) await fs.remove(filePath).catch(() => {});
   }
+}
+
+function userError(error) {
+  const detail = String(error?.message || "").slice(0, 350);
+  if (error?.code === "source_forbidden" || detail.includes("source_forbidden")) {
+    return `❌ رفضت TikTok تنزيل هذا الفيديو (HTTP 403 من المصدر). قد يكون خاصًا أو محميًا أو أن خادم yy السحابي غير مسموح له؛ لا يمكن تجاوز رفض المنصة.\n${detail}`;
+  }
+  return `❌ تعذّر تحميل الفيديو: ${detail || "خطأ غير معروف"}`;
 }
 
 export default {
   config: {
     name: "fyp",
     aliases: ["تيك_توك"],
-    version: "6.0.0",
+    version: "7.0.0",
     role: 0,
     countDown: 5,
     category: "وسائط وتحميل",
-    description: "تحميل فيديوهات تيك توك — بحث + تنزيل عبر API.",
+    description: "بحث فيديوهات TikTok عبر tS وتنزيلها عبر yy.",
     usage: [
       "{pn}fyp <كلمة بحث أو رابط> — تحميل أول نتيجة",
       "{pn}fyp fyp — فيديو عشوائي",
@@ -101,29 +81,26 @@ export default {
     if (!args[0]) return message.reply(HELP);
 
     const raw = args.join(" ").trim();
-
-    // تحقّق من الإعدادات قبل أي عمل
+    const isUrl = /^https?:\/\//i.test(raw);
     try {
+      // التحقق من تهيئة الخدمتين قبل بدء البحث أو التنزيل.
       getApiUrl();
-      if (!/^https?:\/\//i.test(raw)) getTiktokApi();
-    } catch (e) {
-      console.error("❌ [fyp]", e.message);
-      return message.reply(`⚠️ ${e.message}`);
+      if (!isUrl) getTiktokApiUrl();
+
+      let videoUrl = raw;
+      if (!isUrl) {
+        const video = raw.toLowerCase() === "fyp"
+          ? await randomVideo()
+          : await searchVideo(raw);
+        if (!video) return message.reply("❌ لا توجد نتائج بحث.");
+        videoUrl = video.url;
+      }
+
+      const ok = await downloadAndSend(api, threadID, messageID, videoUrl);
+      if (!ok) await message.reply("❌ تعذّر إرسال الفيديو.");
+    } catch (error) {
+      console.error("❌ [fyp]", error?.message || error);
+      await message.reply(userError(error));
     }
-
-    // رابط مباشر → تنزيل مباشر عبر API
-    if (/^https?:\/\//i.test(raw)) {
-      const ok = await downloadAndSend(api, threadID, messageID, raw);
-      if (!ok) await message.reply("❌ تعذّر تحميل الفيديو.");
-      return;
-    }
-
-    // بحث
-    const wantRandom = raw.toLowerCase() === "fyp";
-    const video = wantRandom ? await randomVideo() : await searchVideo(raw);
-    if (!video) return message.reply("❌ لا توجد نتائج.");
-
-    const ok = await downloadAndSend(api, threadID, messageID, video.url);
-    if (!ok) await message.reply("❌ تعذّر تحميل الفيديو.");
   },
 };
