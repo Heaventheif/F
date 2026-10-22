@@ -1,66 +1,130 @@
 "use strict";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import http from "../utils/fetchHttp.js";
 import fs from "fs-extra";
-import os from "os";
-import path from "path";
-import { randomUUID } from "node:crypto";
-import { youtubeMusicSearch } from "@hydralerne/youtube-api";
+import * as ytmp3 from "./ytmp3.js";
 
-const execFileAsync = promisify(execFile);
-
+const BROWSER_HEADERS = ytmp3.BROWSER_HEADERS;
 const TRACK_EMOJIS = ["👍", "❤️", "😆", "😮", "😢", "😡", "🥰", "🤩"];
 const LIST_SIZE = 7;
 const LIST_TTL_MS = 120_000;
+const CLIENT_ID_TTL_MS = 12 * 60 * 60 * 1000;
 
 const HELP =
-  "🎵 YouTube Music\n\n" +
-  "song <اسم الأغنية>      — تشغيل أول نتيجة مباشرة\n" +
+  "🎵 موسيقى\n\n" +
+  "song <اسم الأغنية>      — تشغيل أول نتيجة\n" +
   "song s <اسم الأغنية>    — عرض قائمة للاختيار\n" +
   "(أو موسيقى بدل song)\n\n" +
+  "يبحث في SoundCloud أولاً، وإن لم يجد\n" +
+  "يستخدم YouTube Music كاحتياطي.\n\n" +
   "مثال:\n" +
   "song after the dark mr kitty\n" +
   "song s mr kitty";
 
+const isStale = (err) => [401, 403, 404].includes(err?.response?.status);
 const cleanTemp = (p) => fs.remove(p).catch(() => {});
 
-// ─── بحث ────────────────────────────────────────────────────────
-async function searchTracks(query, limit) {
-  const results = await youtubeMusicSearch(query, "songs");
-  if (!Array.isArray(results) || !results.length)
-    throw new Error("لم تُوجد نتائج على YouTube Music");
-  return results.slice(0, limit);
+// ─── client_id (SoundCloud) ─────────────────────────────────────
+let _clientId = null;
+let _clientExp = 0;
+let _clientPromise = null;
+
+async function fetchClientId() {
+  const page = await http.get("https://soundcloud.com", { headers: BROWSER_HEADERS, timeout: 15000 });
+  const scriptUrls = [...String(page.data).matchAll(/https:\/\/a-v2\.sndcdn\.com\/[^"]+\.js/g)].map(m => m[0]);
+  if (!scriptUrls.length) throw new Error("لم تُوجد سكريبتات SoundCloud");
+  for (const url of scriptUrls.slice(-8).reverse()) {
+    try {
+      const { data } = await http.get(url, { headers: BROWSER_HEADERS, timeout: 10000 });
+      const text = String(data);
+      const match =
+        text.match(/[{,]client_id:"([a-zA-Z0-9]{20,40})"/) ||
+        text.match(/"client_id"\s*:\s*"([a-zA-Z0-9]{20,40})"/) ||
+        text.match(/client_id\s*=\s*"([a-zA-Z0-9]{20,40})"/);
+      if (match) return match[1];
+    } catch (_) {}
+  }
+  throw new Error("فشل استخراج client_id من SoundCloud");
 }
 
-// ─── تحميل عبر yt-dlp ──────────────────────────────────────────
-async function downloadToTemp(videoId) {
-  const url = `https://music.youtube.com/watch?v=${videoId}`;
-  const filePath = path.join(os.tmpdir(), `yt_${Date.now()}_${randomUUID()}.mp3`);
+// طلبات متزامنة تشترك في عملية جلب واحدة
+async function getClientId(forceRefresh = false) {
+  if (!forceRefresh && _clientId && Date.now() < _clientExp) return _clientId;
+  if (!_clientPromise) {
+    _clientPromise = fetchClientId()
+      .then((id) => { _clientId = id; _clientExp = Date.now() + CLIENT_ID_TTL_MS; return id; })
+      .finally(() => { _clientPromise = null; });
+  }
+  return _clientPromise;
+}
+getClientId().catch(() => {});
 
+// ─── بحث SoundCloud ─────────────────────────────────────────────
+async function searchSC(query, limit) {
+  const doSearch = async (forceRefresh) => {
+    const client_id = await getClientId(forceRefresh);
+    const res = await http.get("https://api-v2.soundcloud.com/search/tracks", {
+      params: {
+        q: query, client_id, limit: limit * 3, // نطلب أكثر لأن بعض النتائج معاينة/محجوبة
+        offset: 0, linked_partitioning: 1,
+        app_version: "1733219585", app_locale: "en",
+      },
+      headers: BROWSER_HEADERS,
+      timeout: 15000,
+    });
+    if (res.status === 401 || res.status === 403) {
+      const e = new Error(`HTTP ${res.status}`);
+      e.response = { status: res.status };
+      throw e;
+    }
+    const all = (res.data?.collection || []).filter((t) => t?.permalink_url);
+    // نفضّل المقاطع القابلة للتشغيل كاملة (بدون معاينة 30 ثانية أو حجب)
+    const playable = all.filter((t) => t.access !== "preview" && t.access !== "blocked" && t.policy !== "SNIP" && t.policy !== "BLOCK");
+    const tracks = (playable.length ? playable : all).slice(0, limit);
+    if (!tracks.length) throw new Error("no_results");
+    return tracks;
+  };
   try {
-    await execFileAsync("yt-dlp", [
-      "-x",
-      "--audio-format", "mp3",
-      "--audio-quality", "0",
-      "-o", filePath,
-      "--no-playlist",
-      "--no-warnings",
-      url,
-    ], { timeout: 90_000 });
-
-    const stat = await fs.stat(filePath);
-    if (!stat.size) throw new Error("ملف الصوت فارغ");
-    return filePath;
+    return await doSearch(false);
   } catch (err) {
-    await cleanTemp(filePath);
-    throw new Error(`فشل التحميل: ${err.message?.substring(0, 200) || "yt-dlp error"}`);
+    if (isStale(err)) return doSearch(true);
+    throw err;
   }
 }
 
-async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
+// ─── بحث موحّد: SC أولاً ثم YT كاحتياطي ───────────────────────
+async function search(query, limit) {
+  try {
+    const tracks = await searchSC(query, limit);
+    return { source: "sc", tracks };
+  } catch {
+    const tracks = await ytmp3.search(query, limit);
+    return { source: "yt", tracks };
+  }
+}
+
+// ─── تنزيل ─────────────────────────────────────────────────────
+// SoundCloud عبر خدمة الـ API (تحويل إلى MP3 — يدعم مقاطع HLS أيضًا)
+const downloadSC = (permalinkUrl) => ytmp3.downloadAudio(permalinkUrl, "mp3");
+
+// ─── إرسال المقطع ──────────────────────────────────────────────
+async function sendTrack(api, threadID, messageID, track, source, listMsgId = null) {
   let filePath = null;
   try {
-    filePath = await downloadToTemp(track.videoId);
+    if (source === "sc") {
+      try {
+        filePath = await downloadSC(track.permalink_url);
+      } catch (err) {
+        // فشل SoundCloud → جرّب YouTube Music بنفس الاسم
+        console.error("[music] فشل SoundCloud، التحويل إلى YouTube:", err.message);
+        const q = `${trackTitle(track, source)} ${trackArtist(track, source)}`.trim();
+        const [yt] = await ytmp3.search(q, 1).catch(() => []);
+        if (!yt?.videoId) throw err;
+        filePath = await ytmp3.download(yt.videoId);
+      }
+    } else {
+      filePath = await ytmp3.download(track.videoId);
+    }
+
     await global.mediaSendFile(api, filePath, threadID, messageID);
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
   } finally {
@@ -69,19 +133,33 @@ async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
 }
 
 // ─── قائمة الاختيار بالتفاعل ────────────────────────────────────
-function fmtDuration(ms) {
-  if (!ms) return "";
-  const s = Math.round(ms / 1000);
+function fmtDuration(value) {
+  if (!value) return "";
+  if (typeof value === "string") return `⏱ ${value}`;
+  // SoundCloud: ميلي ثانية. YouTube Music: غالبًا ثوانٍ.
+  const s = value > 10_000 ? Math.round(value / 1000) : Math.round(value);
   return `⏱ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-async function showTrackList(api, event, list) {
+function trackTitle(t) {
+  return t.title || "بدون عنوان";
+}
+function trackArtist(t, source) {
+  return source === "sc" ? (t.user?.username || "") : (t.artist || "");
+}
+function trackDuration(t, source) {
+  return source === "sc" ? (t.full_duration || t.duration) : t.duration;
+}
+
+async function showTrackList(api, event, list, source) {
   const { threadID, messageID } = event;
+  list = list.slice(0, TRACK_EMOJIS.length);
   const line = "─".repeat(22);
-  let text = `🎵 نتائج البحث في YouTube Music:\n${line}\n`;
+  const srcName = source === "sc" ? "SoundCloud" : "YouTube Music";
+  let text = `🎵 نتائج البحث في ${srcName}:\n${line}\n`;
   list.forEach((t, i) => {
-    text += `${TRACK_EMOJIS[i]} ${t.title || "بدون عنوان"}\n`;
-    text += `   👤 ${t.artist || ""} ${fmtDuration(t.duration)}\n${line}\n`;
+    text += `${TRACK_EMOJIS[i]} ${trackTitle(t)}\n`;
+    text += `   👤 ${trackArtist(t, source)} ${fmtDuration(trackDuration(t, source))}\n${line}\n`;
   });
   text += "تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين";
 
@@ -91,27 +169,33 @@ async function showTrackList(api, event, list) {
   const listeners = global.client?.reactionListener;
   if (!sent?.messageID || !listeners) return;
 
+  const timer = setTimeout(() => delete listeners[sent.messageID], LIST_TTL_MS);
   listeners[sent.messageID] = {
     author: event.senderID,
     callback: async ({ api, event: re }) => {
       const idx = TRACK_EMOJIS.indexOf(re.reaction);
       if (idx === -1 || idx >= list.length) return;
+      clearTimeout(timer);
       delete listeners[sent.messageID];
-      await sendTrack(api, threadID, messageID, list[idx], sent.messageID);
+      try {
+        await sendTrack(api, threadID, messageID, list[idx], source, sent.messageID);
+      } catch (err) {
+        console.error("[music] خطأ:", err.message);
+        global.safeSend(api, `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
+      }
     },
   };
-  setTimeout(() => delete listeners[sent.messageID], LIST_TTL_MS);
 }
 
 export default {
   config: {
     name:        "song",
     aliases:     ["موسيقى"],
-    version:     "2.0.0",
+    version:     "3.2.0",
     role:        0,
     countDown:   0,
     category: "وسائط وتحميل",
-    description: "بحث وتشغيل مقاطع من YouTube Music — أضف s لعرض قائمة نتائج",
+    description: "بحث وتشغيل مقاطع — SoundCloud أولاً، YouTube Music كاحتياطي",
     usage: [
       "{pn}song <اسم> — تشغيل أول نتيجة مباشرة",
       "{pn}song s <اسم> — عرض قائمة نتائج للاختيار",
@@ -128,12 +212,16 @@ export default {
     if (!query) return message.reply("❌ أرسل اسم الأغنية.");
 
     try {
-      const tracks = await searchTracks(query, showList ? LIST_SIZE : 1);
-      if (showList) await showTrackList(api, event, tracks);
-      else await sendTrack(api, threadID, messageID, tracks[0]);
+      ytmp3.getApiUrl(); // فشل مبكر برسالة واضحة إذا لم يُضبط API_URL
+      const { source, tracks } = await search(query, showList ? LIST_SIZE : 1);
+      if (showList) await showTrackList(api, event, tracks, source);
+      else await sendTrack(api, threadID, messageID, tracks[0], source);
     } catch (err) {
-      console.error("[yt-music] خطأ:", err.message);
-      global.safeSend(api, `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
+      console.error("[music] خطأ:", err.message);
+      const msg = err.message === "no_results"
+        ? "❌ لم تُوجد نتائج على SoundCloud أو YouTube Music."
+        : `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`;
+      global.safeSend(api, msg, threadID, null, messageID);
     }
   },
-};   
+};
